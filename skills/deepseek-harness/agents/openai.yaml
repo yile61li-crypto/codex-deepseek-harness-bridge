@@ -1,4 +1,4 @@
 interface:
   display_name: "DeepSeek Harness"
-  short_description: "Start DSH, open it in Codex, and manage exact sessions"
-  default_prompt: "Open DeepSeek Harness in the Codex side panel."
+  short_description: "Start DSH, manage exact sessions, and relay images"
+  default_prompt: "Open DeepSeek Harness in Codex or relay a DSH image through an isolated vision subagent."

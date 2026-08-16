@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-bridge",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Start, open, and control DeepSeek Harness from Codex through MCP.",
   "author": {
     "name": "DeepSeek Harness Bridge contributors"
@@ -26,6 +26,7 @@
       "Managed local runtime",
       "Codex browser handoff",
       "Session streaming",
+      "Vision subagent relay",
       "Workspace routing",
       "Permission controls",
       "Approval and question handoff"
@@ -35,6 +36,7 @@
       "List my DeepSeek Harness workspaces and ask where a new task should run.",
       "List the active DeepSeek Harness sessions.",
       "Continue a specific DeepSeek Harness session and wait only for its new result.",
+      "Analyze an image from a DeepSeek Harness session in an isolated Codex vision subagent.",
       "Start a read-only DeepSeek Harness task and report any approval request without approving it."
     ],
     "brandColor": "#4D6BFE"

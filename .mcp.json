@@ -14,6 +14,7 @@
         "DSH_RUNTIME_CWD": "",
         "DSH_RUNTIME_LOG_DIR": "",
         "DSH_RUNTIME_START_TIMEOUT_MS": "30000",
+        "DSH_MAX_ATTACHMENT_BYTES": "5242880",
         "DSH_DEFAULT_PERMISSION": "read-only",
         "DSH_MAX_PERMISSION": "danger-full-access",
         "DSH_SETTINGS_FILE": "",

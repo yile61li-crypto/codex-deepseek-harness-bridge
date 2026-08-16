@@ -29,6 +29,11 @@ it('implements MCP initialize and tools/list over stdio', async t => {
       value = { created: true, workspace: { workspaceId: 'w2', path: '/new-work', title: 'new-work', sessionIds: [] } }
     } else if (message.method === 'commands/execute') {
       value = { commandId: 'c-permission', result: { kind: 'success', sourceEventSeq: 10 } }
+    } else if (message.method === 'session.attachment') {
+      value = {
+        attachment: { attachmentId: 'att-1', mediaType: 'image/png', bytes: 4, width: 2, height: 2 },
+        data: 'AQIDBA==',
+      }
     } else if (message.method === 'session.prompt') {
       value = { accepted: true }
     } else {
@@ -101,21 +106,24 @@ it('implements MCP initialize and tools/list over stdio', async t => {
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 17, method: 'tools/call', params: {
     name: 'dsh_set_default_permission', arguments: { permission: 'danger-full-access', user_confirmed: true },
   } })}\n`)
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 18, method: 'tools/call', params: {
+    name: 'dsh_get_attachment', arguments: { session_id: 's-read', attachment_id: 'att-1' },
+  } })}\n`)
   const settingsDeadline = Date.now() + 5_000
-  while (replies.length < 17 && Date.now() < settingsDeadline) await new Promise(resolve => setTimeout(resolve, 10))
+  while (replies.length < 18 && Date.now() < settingsDeadline) await new Promise(resolve => setTimeout(resolve, 10))
   child.kill()
   await once(child, 'exit')
   await new Promise(resolve => dsh.close(resolve))
 
   const byId = Object.fromEntries(replies.map(reply => [reply.id, reply]))
   assert.equal(byId[1].result.protocolVersion, '2025-06-18')
-  assert.equal(byId[2].result.tools.length, 21)
+  assert.equal(byId[2].result.tools.length, 22)
   assert.deepEqual(byId[2].result.tools.map(tool => tool.name), [
     'dsh_runtime_status', 'dsh_ensure_runtime', 'dsh_health', 'dsh_set_default_permission',
     'dsh_list_workspaces', 'dsh_create_workspace', 'dsh_list_agent_presets', 'dsh_list_sessions', 'dsh_get_session',
     'dsh_search_sessions', 'dsh_get_models', 'dsh_start_task', 'dsh_rename_session', 'dsh_fork_session',
     'dsh_set_permission', 'dsh_send', 'dsh_wait', 'dsh_answer_approval', 'dsh_answer_question',
-    'dsh_history', 'dsh_cancel',
+    'dsh_history', 'dsh_get_attachment', 'dsh_cancel',
   ])
   const startTool = byId[2].result.tools.find(tool => tool.name === 'dsh_start_task')
   assert.equal(startTool.annotations.destructiveHint, true)
@@ -145,6 +153,11 @@ it('implements MCP initialize and tools/list over stdio', async t => {
   assert.equal(byId[17].result.structuredContent.defaultPermission, 'danger-full-access')
   assert.equal(byId[17].result.structuredContent.persisted, true)
   assert.equal(byId[17].result.structuredContent.appliesTo, 'future-tasks-only')
+  assert.equal(byId[18].result.structuredContent.attachment.attachmentId, 'att-1')
+  assert.equal(byId[18].result.structuredContent.data, undefined)
+  assert.equal(byId[18].result.content[1].type, 'image')
+  assert.equal(byId[18].result.content[1].mimeType, 'image/png')
+  assert.equal(byId[18].result.content[1].data, 'AQIDBA==')
   const permissionCommand = dshRequests.find(request => request.method === 'commands/execute')
   assert.equal(permissionCommand.payload.args.line, '/permission danger-full-access')
   assert.equal(dshRequests.filter(request => request.method === 'workspace.create').length, 1)

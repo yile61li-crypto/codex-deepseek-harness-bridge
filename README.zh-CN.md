@@ -51,6 +51,7 @@ npm ci --ignore-scripts
 | `dsh_answer_approval` | 显式启用后，对精确审批请求仅本次批准或拒绝。 |
 | `dsh_answer_question` | 显式启用后，回答或取消一整批精确问题。 |
 | `dsh_history` | 读取可分页、有上限的消息和可选工具活动。 |
+| `dsh_get_attachment` | 为隔离的 Codex 视觉子 agent 获取一张经会话授权的图片。 |
 | `dsh_cancel` | 取消当前轮次，不删除排队任务。 |
 
 `dsh_start_task` 和 `dsh_send` 会调用 DSH 已配置的模型，可能产生额度消耗。插件永远不会自动审批或回答。
@@ -81,6 +82,7 @@ npm ci --ignore-scripts
 | `DSH_RUNTIME_CWD` | 专用状态目录 | 自定义运行时工作目录；默认不使用插件源码目录，也不影响任务自身选择的工作区。 |
 | `DSH_RUNTIME_LOG_DIR` | 用户状态目录 | DSH stdout/stderr 日志目录；不会写入 MCP stdout。 |
 | `DSH_RUNTIME_START_TIMEOUT_MS` | `30000` | 等待 DSH 健康的毫秒数，范围 1000–120000。 |
+| `DSH_MAX_ATTACHMENT_BYTES` | `5242880` | 隔离视觉子 agent 可获取的图片解码后大小上限；可配置为 1–25 MiB。 |
 | `DSH_DEFAULT_PERMISSION` | `read-only` | 用户尚未持久修改时使用的初始默认权限。 |
 | `DSH_MAX_PERMISSION` | `danger-full-access` | 工具参数无法越过的权限硬上限；需要时可降为 `workspace-write` 或 `read-only`。 |
 | `DSH_SETTINGS_FILE` | `~/.deepseek-harness-bridge/settings.json` | 可选的持久化桥接设置文件绝对路径。 |
@@ -115,6 +117,18 @@ DSH 网页处理。可选 MCP 回复只接受精确的待处理身份；如果�
 
 `dsh_history` 返回 `firstSeq` 和 `nextBeforeSeq`，下一页应把后者作为排他的 `before_seq`。工具参数和输出
 默认不返回；只有明确设置 `include_tools=true` 才返回，并始终截断，以控制敏感信息和 token 消耗。
+
+### 隔离的视觉回传
+
+DSH 目前没有可靠的视觉能力，所以 `dsh_wait` 和 `dsh_history` 只把有界的图片元数据交给 Codex 主会话。
+插件 Skill 强制新建一个 `fork_turns="none"` 的 Codex 协作子 agent，由子 agent 调用
+`dsh_get_attachment`、读取 MCP 图片并只返回紧凑的结构化文字；原图和 Base64 不进入主会话。主会话可以
+把这段文字发回原来的精确 DSH 会话。支持 PNG、JPEG、WebP 和 GIF；桥会校验会话引用、媒体元数据、
+Base64 长度和配置的大小上限。
+
+这是 Skill 明确执行的隔离契约，而不是对调用者身份的加密认证：当前公开插件格式不能注册自定义子 agent
+类型，因此使用 Codex 通用协作子 agent。如果当前环境没有子 agent，Skill 会失败关闭；除非用户明确放弃
+隔离，否则不会退回到主会话读取原图。
 
 可以用 `DSH_WEB_URL` 更换本机端口，但插件会拒绝局域网和公网地址、HTTPS、URL 凭据、路径、查询参数
 及 fragment，因为当前 DSH Web API 依赖本机信任边界，并不是带用户认证的远程 API。

@@ -74,6 +74,14 @@ describe('RPC client', () => {
         response.end(JSON.stringify({ type: 'server-response', rpcId: message.rpcId, result: { ok: true, value: { sessionId: 'fork-1' } } }))
       } else if (message.method === 'session.rename') {
         response.end(JSON.stringify({ type: 'server-response', rpcId: message.rpcId, result: { ok: true, value: { title: 'New', seq: 11 } } }))
+      } else if (message.method === 'session.attachment') {
+        response.end(JSON.stringify({
+          type: 'server-response', rpcId: message.rpcId,
+          result: { ok: true, value: {
+            attachment: { attachmentId: 'att-1', mediaType: 'image/png', bytes: 4, width: 2, height: 2, name: 'field.png' },
+            data: 'AQIDBA==',
+          } },
+        }))
       } else {
         const value = message.method === 'commands/execute'
           ? { commandId: 'cmd-1', result: { kind: 'success', sourceEventSeq: 10 } }
@@ -172,6 +180,14 @@ describe('RPC client', () => {
     assert.equal((await client.renameSession('s1', 'New')).seq, 11)
     assert.equal((await client.forkSession('s1', { atSeq: 9 })).sessionId, 'fork-1')
     assert.deepEqual(requests.at(-1).message.payload, { sessionId: 's1', atSeq: 9 })
+    const image = await client.getAttachment('s1', 'att-1')
+    assert.equal(image.attachment.mediaType, 'image/png')
+    assert.equal(image.data, 'AQIDBA==')
+    assert.deepEqual(requests.at(-1).message.payload, { sessionId: 's1', attachmentId: 'att-1' })
+    await assert.rejects(
+      client.getAttachment('s1', 'att-1', { maxBytes: 3 }),
+      error => error.code === 'attachment-too-large',
+    )
   })
 })
 
@@ -181,8 +197,14 @@ describe('history compaction', () => {
       hasMore: false,
       events: [
         { event: { type: 'assistant/chunk', seq: 1, data: { chunk: 'x' } } },
-        { event: { type: 'user/message', seq: 2, data: { content: [{ type: 'text', text: 'question' }], source: { kind: 'user', rpcId: 'prompt-1' } } } },
-        { event: { type: 'assistant/message', seq: 3, data: { message: { content: [{ type: 'reasoning', text: 'hidden' }, { type: 'text', text: 'answer' }] } } } },
+        { event: { type: 'user/message', seq: 2, data: { content: [
+          { type: 'text', text: 'question' },
+          { type: 'image', attachment: { attachmentId: 'att-1', mediaType: 'image/png', bytes: 4, width: 2, height: 2, name: 'field.png' } },
+        ], source: { kind: 'user', rpcId: 'prompt-1' } } } },
+        { event: { type: 'assistant/message', seq: 3, data: { message: { content: [
+          { type: 'reasoning', text: 'hidden' }, { type: 'text', text: 'answer' },
+          { type: 'tool-result', content: [{ type: 'image', attachment: { attachmentId: 'att-2', mediaType: 'image/webp', bytes: 5, width: 3, height: 2 } }] },
+        ] } } } },
         { event: { type: 'turn/end', seq: 4, data: { reason: { kind: 'completed' } } } },
       ],
     })
@@ -190,6 +212,10 @@ describe('history compaction', () => {
     assert.equal(summary.finalResponse, 'answer')
     assert.equal(summary.finishReason, 'completed')
     assert.deepEqual(summary.messages.map(item => item.text), ['question', 'answer'])
+    assert.deepEqual(summary.attachments.map(item => ({ id: item.attachmentId, seq: item.seq, type: item.eventType })), [
+      { id: 'att-1', seq: 2, type: 'user/message' },
+      { id: 'att-2', seq: 3, type: 'assistant/message' },
+    ])
   })
 
   it('keeps a newer streamed sequence when history has no newer event', () => {

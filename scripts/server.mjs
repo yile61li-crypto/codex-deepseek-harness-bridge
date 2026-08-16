@@ -6,9 +6,10 @@ import { DshClient, DshRpcError, parsePermissionPreset } from '../src/dsh-client
 import { DshRuntimeError, DshRuntimeManager } from '../src/dsh-runtime.mjs'
 import { PermissionSettings, PermissionSettingsError } from '../src/permission-settings.mjs'
 
-const SERVER_INFO = { name: 'deepseek-harness-bridge', version: '0.4.0' }
+const SERVER_INFO = { name: 'deepseek-harness-bridge', version: '0.5.0' }
 const SUPPORTED_PROTOCOLS = new Set(['2024-11-05', '2025-03-26', '2025-06-18'])
 const PERMISSION_RANK = Object.freeze({ 'read-only': 0, 'workspace-write': 1, 'danger-full-access': 2 })
+const MCP_IMAGE_RESULT = Symbol('mcp-image-result')
 const controllers = new Map()
 const client = new DshClient()
 const modelRequestTimes = []
@@ -46,6 +47,7 @@ const DEFAULT_WORKSPACE_ID = optionalEnv('DSH_DEFAULT_WORKSPACE_ID')
 const MAX_CONCURRENT_WAITS = integerEnv('DSH_MAX_CONCURRENT_WAITS', 4, 1, 32)
 const MODEL_REQUESTS_PER_MINUTE = integerEnv('DSH_MODEL_REQUESTS_PER_MINUTE', 12, 1, 120)
 const RUNTIME_START_TIMEOUT_MS = integerEnv('DSH_RUNTIME_START_TIMEOUT_MS', 30_000, 1_000, 120_000)
+const MAX_ATTACHMENT_BYTES = integerEnv('DSH_MAX_ATTACHMENT_BYTES', 5 * 1024 * 1024, 1, 25 * 1024 * 1024)
 if (PERMISSION_RANK[INSTALLATION_DEFAULT_PERMISSION] > PERMISSION_RANK[MAX_PERMISSION]) {
   throw new Error('DSH_DEFAULT_PERMISSION must not exceed DSH_MAX_PERMISSION')
 }
@@ -75,6 +77,7 @@ function bridgePolicy() {
     maxConcurrentWaits: MAX_CONCURRENT_WAITS,
     modelRequestsPerMinute: MODEL_REQUESTS_PER_MINUTE,
     runtimeStartTimeoutMs: RUNTIME_START_TIMEOUT_MS,
+    maxAttachmentBytes: MAX_ATTACHMENT_BYTES,
   }
 }
 
@@ -157,7 +160,7 @@ const tools = [
     inputSchema: {
       type: 'object',
       properties: {
-        session_id: { type: 'string', minLength: 1 },
+        session_id: { type: 'string', minLength: 1, maxLength: 512 },
         include_history: { type: 'boolean', default: false },
         max_messages: { type: 'integer', minimum: 1, maximum: 20, default: 8 },
       },
@@ -328,6 +331,20 @@ const tools = [
         max_tool_events: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
       },
       required: ['session_id'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'dsh_get_attachment',
+    description: 'Read one session-authorized DSH image as MCP ImageContent. This raw-image tool is intended for a fork_turns=none Codex vision subagent; the main conversation should use only history attachment metadata.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', minLength: 1 },
+        attachment_id: { type: 'string', minLength: 1, maxLength: 512 },
+      },
+      required: ['session_id', 'attachment_id'],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
@@ -713,6 +730,20 @@ async function callTool(name, args, signal) {
         maxToolEvents: optionalInteger(args, 'max_tool_events', 20, 1, 100),
         signal,
       })
+    case 'dsh_get_attachment': {
+      const image = await client.getAttachment(
+        requireString(args, 'session_id'), requireString(args, 'attachment_id'),
+        { signal, maxBytes: MAX_ATTACHMENT_BYTES },
+      )
+      return {
+        [MCP_IMAGE_RESULT]: true,
+        metadata: {
+          attachment: image.attachment,
+          isolation: 'codex-vision-subagent-only',
+        },
+        data: image.data,
+      }
+    }
     case 'dsh_cancel': {
       const sessionId = requireString(args, 'session_id')
       return { sessionId, ...(await client.cancel(sessionId, { signal })) }
@@ -727,6 +758,15 @@ function write(message) {
 }
 
 function toolResult(value) {
+  if (value?.[MCP_IMAGE_RESULT] === true) {
+    return {
+      content: [
+        { type: 'text', text: JSON.stringify(value.metadata, null, 2) },
+        { type: 'image', data: value.data, mimeType: value.metadata.attachment.mediaType },
+      ],
+      structuredContent: value.metadata,
+    }
+  }
   return {
     content: [{ type: 'text', text: JSON.stringify(value, null, 2) }],
     structuredContent: value,

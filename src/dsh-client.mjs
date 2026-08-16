@@ -3,8 +3,12 @@ import { randomUUID } from 'node:crypto'
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]'])
 const DEFAULT_TIMEOUT_MS = 30_000
 const DEFAULT_HISTORY_CHAR_LIMIT = 30_000
+const DEFAULT_MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
+const MAX_ATTACHMENT_ID_CHARS = 512
+const MAX_ATTACHMENT_NAME_CHARS = 256
 const USER_ACTION_SETTLE_DELAY_MS = 25
 export const PERMISSION_PRESETS = Object.freeze(['read-only', 'workspace-write', 'danger-full-access'])
+const IMAGE_MEDIA_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 
 export class DshRpcError extends Error {
   constructor(message, { code = 'dsh-error', details, method } = {}) {
@@ -67,6 +71,47 @@ function textFromContent(content) {
     .join('\n')
 }
 
+function publicImageAttachmentRef(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  if (typeof value.attachmentId !== 'string' || value.attachmentId.trim() === ''
+      || value.attachmentId.length > MAX_ATTACHMENT_ID_CHARS) return null
+  if (!IMAGE_MEDIA_TYPES.has(value.mediaType)) return null
+  if (!Number.isInteger(value.bytes) || value.bytes < 1
+      || !Number.isInteger(value.width) || value.width < 1
+      || !Number.isInteger(value.height) || value.height < 1) return null
+  const cleanName = typeof value.name === 'string'
+    ? value.name.replace(/[\u0000-\u001f\u007f-\u009f]/g, '\uFFFD')
+    : ''
+  const name = cleanName !== ''
+    ? cleanName.slice(0, MAX_ATTACHMENT_NAME_CHARS)
+    : undefined
+  return {
+    attachmentId: value.attachmentId,
+    mediaType: value.mediaType,
+    bytes: value.bytes,
+    width: value.width,
+    height: value.height,
+    ...(name === undefined ? {} : { name, nameTruncated: cleanName.length > name.length }),
+  }
+}
+
+function collectImageAttachments(node, output, { seq, eventType }, depth = 0) {
+  if (depth > 12 || node === null || typeof node !== 'object') return
+  if (Array.isArray(node)) {
+    for (const item of node) collectImageAttachments(item, output, { seq, eventType }, depth + 1)
+    return
+  }
+  if (node.type === 'image') {
+    const attachment = publicImageAttachmentRef(node.attachment)
+    if (attachment !== null && !output.has(attachment.attachmentId)) {
+      output.set(attachment.attachmentId, { ...attachment, seq, eventType })
+    }
+  }
+  for (const value of Object.values(node)) {
+    collectImageAttachments(value, output, { seq, eventType }, depth + 1)
+  }
+}
+
 function boundedNewestMessages(messages, maxChars) {
   let remaining = maxChars
   let truncated = false
@@ -121,6 +166,7 @@ export function summarizeHistoryValue(value, {
   let finishReason = null
   const rawMessages = []
   const rawToolEvents = []
+  const imageAttachments = new Map()
 
   for (const entry of entries) {
     const event = entry?.event
@@ -129,6 +175,9 @@ export function summarizeHistoryValue(value, {
       lastSeq = Math.max(lastSeq, event.seq)
     }
     const inRequestedRange = Number.isInteger(event?.seq) && event.seq > afterSeq
+    if (inRequestedRange) {
+      collectImageAttachments(event?.data, imageAttachments, { seq: event.seq, eventType: event.type })
+    }
     if (inRequestedRange && event?.type === 'assistant/message') {
       const text = textFromContent(event.data?.message?.content)
       if (text !== '') rawMessages.push({ role: 'assistant', seq: event.seq, text })
@@ -157,6 +206,7 @@ export function summarizeHistoryValue(value, {
     finalResponse,
     finishReason,
     messages: bounded.messages,
+    attachments: [...imageAttachments.values()],
     messagesTruncated: bounded.truncated,
     filteredAfterSeq: afterSeq,
     ...(includeTools ? { toolEvents, toolEventsTruncated: toolEvents.length < rawToolEvents.length } : {}),
@@ -330,6 +380,48 @@ export class DshClient {
       })),
       archivedSessionIds: value.archivedSessionIds ?? [],
     }
+  }
+
+  async getAttachment(sessionId, attachmentId, {
+    signal, maxBytes = DEFAULT_MAX_ATTACHMENT_BYTES,
+  } = {}) {
+    const id = requireWireString(attachmentId, 'attachmentId')
+    if (id.length > MAX_ATTACHMENT_ID_CHARS) {
+      throw new DshRpcError('attachmentId is too long', { code: 'invalid-argument' })
+    }
+    if (!Number.isInteger(maxBytes) || maxBytes < 1) {
+      throw new DshRpcError('maxBytes must be a positive integer', { code: 'invalid-argument' })
+    }
+    const value = await this.rpc('session.attachment', {
+      sessionId: requireWireString(sessionId, 'sessionId'), attachmentId: id,
+    }, { signal })
+    const attachment = publicImageAttachmentRef(value?.attachment)
+    if (attachment === null || attachment.attachmentId !== id || typeof value?.data !== 'string'
+        || value.data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value.data)) {
+      throw new DshRpcError('DSH returned invalid image attachment data', {
+        code: 'attachment-data-invalid', method: 'session.attachment', details: { attachmentId: id },
+      })
+    }
+    const decoded = Buffer.from(value.data, 'base64')
+    const decodedBytes = decoded.byteLength
+    if (decoded.toString('base64') !== value.data) {
+      throw new DshRpcError('DSH returned non-canonical image attachment data', {
+        code: 'attachment-data-invalid', method: 'session.attachment', details: { attachmentId: id },
+      })
+    }
+    if (decodedBytes !== attachment.bytes) {
+      throw new DshRpcError('DSH attachment byte count does not match its metadata', {
+        code: 'attachment-data-invalid', method: 'session.attachment',
+        details: { attachmentId: id, declaredBytes: attachment.bytes, decodedBytes },
+      })
+    }
+    if (decodedBytes > maxBytes) {
+      throw new DshRpcError('DSH attachment exceeds this bridge instance\'s image limit', {
+        code: 'attachment-too-large', method: 'session.attachment',
+        details: { attachmentId: id, bytes: decodedBytes, maxBytes },
+      })
+    }
+    return { attachment, data: value.data }
   }
 
   async createWorkspace(path, options) {

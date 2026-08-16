@@ -56,6 +56,7 @@ After installation, start a new Codex task so the MCP tool catalog is refreshed.
 | `dsh_answer_approval` | Allow once or reject an exact pending approval when explicitly enabled. |
 | `dsh_answer_question` | Answer or cancel an exact question batch when explicitly enabled. |
 | `dsh_history` | Read paginated, bounded messages and optional tool activity. |
+| `dsh_get_attachment` | Fetch one session-authorized image for an isolated Codex vision subagent. |
 | `dsh_cancel` | Cancel the active turn without deleting queued work. |
 
 `dsh_start_task` and `dsh_send` invoke the model configured in DSH and may incur usage. The bridge
@@ -92,6 +93,7 @@ conversation**.
 | `DSH_RUNTIME_CWD` | dedicated state directory | Optional managed-runtime working directory; never defaults to plugin source and remains independent of task workspace selection. |
 | `DSH_RUNTIME_LOG_DIR` | user state directory | DSH stdout/stderr log location, isolated from MCP stdout. |
 | `DSH_RUNTIME_START_TIMEOUT_MS` | `30000` | Health-wait timeout in milliseconds, from 1000 to 120000. |
+| `DSH_MAX_ATTACHMENT_BYTES` | `5242880` | Maximum decoded image size returned to an isolated vision subagent; configurable from 1 to 25 MiB. |
 | `DSH_DEFAULT_PERMISSION` | `read-only` | Initial default used until the user persistently changes it. |
 | `DSH_MAX_PERMISSION` | `danger-full-access` | Hard ceiling that tool arguments cannot exceed. Lower it to `workspace-write` or `read-only` when desired. |
 | `DSH_SETTINGS_FILE` | `~/.deepseek-harness-bridge/settings.json` | Optional absolute path for persistent bridge settings. |
@@ -131,6 +133,20 @@ or automatic response mode exists.
 `dsh_history` returns `firstSeq` and `nextBeforeSeq`; use the latter as the next exclusive
 `before_seq` cursor. Tool arguments and output are excluded by default and strictly truncated when
 `include_tools=true` to limit sensitive output and token usage.
+
+### Isolated visual relay
+
+DSH currently has no dependable vision path, so history and wait results expose only bounded image
+metadata to the main Codex conversation. The bundled skill requires a fresh Codex collaboration
+subagent with `fork_turns="none"` to call `dsh_get_attachment`, inspect the MCP image, and return only
+compact structured text. The parent never receives the image or Base64 and may relay that text back
+to the exact DSH session. PNG, JPEG, WebP, and GIF are accepted; the bridge verifies the session
+reference, media metadata, Base64 length, and configured size limit.
+
+This isolation is an explicit skill contract rather than cryptographic caller authentication: the
+public plugin format cannot register a custom subagent type, so it uses Codex's generic collaboration
+subagent. If subagents are unavailable, the skill fails closed unless the user explicitly permits
+the parent conversation to fetch the image.
 
 A different loopback port can be configured with `DSH_WEB_URL`. Remote hosts, HTTPS URLs,
 credentials, paths, queries, and fragments are rejected deliberately.
