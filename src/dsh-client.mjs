@@ -332,6 +332,24 @@ export class DshClient {
     }
   }
 
+  async createWorkspace(path, options) {
+    const value = await this.rpc('workspace.create', {
+      path: requireWireString(path, 'path'),
+    }, options)
+    const workspace = value.workspace ?? {}
+    return {
+      created: value.created === true,
+      workspace: {
+        workspaceId: workspace.workspaceId,
+        path: workspace.path,
+        title: workspace.title ?? null,
+        sessionIds: workspace.sessionIds ?? [],
+        createdAt: workspace.createdAt,
+        updatedAt: workspace.updatedAt,
+      },
+    }
+  }
+
   async listAgentPresets(options) {
     const value = await this.rpc('agentPreset.list', {}, options)
     return {

@@ -35,6 +35,7 @@ npm ci --ignore-scripts
 | `dsh_ensure_runtime` | 复用健康运行时；不存在时安全启动本地 DSH。 |
 | `dsh_health` | 检查 DSH、桥安全策略与可选能力。 |
 | `dsh_list_workspaces` | 列出已注册工作区及其会话。 |
+| `dsh_create_workspace` | 在用户明确要求后，把已有目录注册为新的工作区/分组。 |
 | `dsh_list_agent_presets` | 列出可用和损坏的 Agent Preset。 |
 | `dsh_list_sessions` | 列出并筛选最近会话。 |
 | `dsh_get_session` | 读取精确会话及可选的有界历史。 |
@@ -62,6 +63,9 @@ npm ci --ignore-scripts
   `dsh_wait.prompt_rpc_id`，就不会把上一轮旧答案或排队在前面的轮次误报成当前结果。
 - 新建工作：指定已注册的 `workspace_id` 或绝对 `cwd`。如果工具参数和安装默认值都没有，
   `dsh_start_task` 返回 `task-target-required`，Codex 应先列出工作区/会话，再询问用户。
+- 只有用户明确要求新建工作区/分组时，才能单独调用 `dsh_create_workspace`，并把
+  `user_confirmed` 设为 `true`；不得自行推断或把它当作无目标时的后备行为。该工具只注册已有绝对目录，
+  不会创建、移动或删除目录内容。
 - 可写权限必须使用已注册的 `workspace_id`；任意 `cwd` 只允许 `read-only`，防止模型通过选择父目录扩大写沙箱。
 
 因此 `dsh_start_task` 永远表示“新对话”，`dsh_send` 永远表示“继续这个精确对话”。

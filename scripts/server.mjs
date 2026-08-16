@@ -98,6 +98,20 @@ const tools = [
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
+    name: 'dsh_create_workspace',
+    description: 'Register an existing local directory as a new DSH workspace/group. Call only after the user explicitly requested creation; never use it as an automatic fallback.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', minLength: 1, description: 'Existing absolute directory to register. This tool does not create, move, or delete filesystem content.' },
+        user_confirmed: { type: 'boolean', enum: [true], description: 'Must be true only when the user explicitly requested this workspace/group in the current conversation.' },
+      },
+      required: ['path', 'user_confirmed'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
     name: 'dsh_list_agent_presets',
     description: 'List the agent presets available in this DSH installation. A broken preset is reported but never selected automatically.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
@@ -492,6 +506,8 @@ async function callTool(name, args, signal) {
     }
     case 'dsh_list_workspaces':
       return client.listWorkspaces({ signal })
+    case 'dsh_create_workspace':
+      return client.createWorkspace(validatedCwd(requireString(args, 'path')), { signal })
     case 'dsh_list_agent_presets':
       return client.listAgentPresets({ signal })
     case 'dsh_list_sessions': {

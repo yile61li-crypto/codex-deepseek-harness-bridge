@@ -46,6 +46,13 @@ describe('RPC client', () => {
             workspaceId: 'w1', path: '/work', title: 'Project', sessionIds: ['s1'], createdAt: 1, updatedAt: 2,
           }], archivedSessionIds: ['archived'] } },
         }))
+      } else if (message.method === 'workspace.create') {
+        response.end(JSON.stringify({
+          type: 'server-response', rpcId: message.rpcId,
+          result: { ok: true, value: { created: true, workspace: {
+            workspaceId: 'w2', path: '/new-work', title: 'new-work', sessionIds: [], createdAt: 3, updatedAt: 3,
+          } } },
+        }))
       } else if (message.method === 'agentPreset.list') {
         response.end(JSON.stringify({
           type: 'server-response', rpcId: message.rpcId,
@@ -154,6 +161,10 @@ describe('RPC client', () => {
   it('discovers workspaces, presets, sessions and safe session mutations', async () => {
     const client = new DshClient({ baseUrl: origin })
     assert.equal((await client.listWorkspaces()).workspaces[0].workspaceId, 'w1')
+    const created = await client.createWorkspace('/new-work')
+    assert.equal(created.created, true)
+    assert.equal(created.workspace.workspaceId, 'w2')
+    assert.deepEqual(requests.at(-1).message.payload, { path: '/new-work' })
     assert.equal((await client.listAgentPresets()).presets[0].id, 'safe')
     assert.equal((await client.getSession('s1')).sessionId, 's1')
     assert.equal((await client.searchSessions('match')).matches[0].sessionId, 's1')

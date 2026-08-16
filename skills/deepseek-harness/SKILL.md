@@ -18,6 +18,7 @@ Keep the page visible when the user asks to watch DSH work.
 ## Choose the conversation deliberately
 
 - Use `dsh_start_task` only for a new conversation. Select an existing `workspace_id`; if the user did not specify a target, list workspaces and sessions, then ask instead of creating an ungrouped session.
+- Call `dsh_create_workspace` only when the user explicitly asks to create/register a new workspace or group and supplies or confirms its existing absolute directory. Set `user_confirmed=true` only for that explicit request. Otherwise list existing workspaces and ask; never create one as a fallback.
 - Use `dsh_send` with an exact `session_id` for every continuation. Never use a process-global "last session".
 - Pass `promptRpcId` and `waitAfterSeq` from start/send into `dsh_wait` so an earlier turn cannot be mistaken for the requested result.
 - Default to read-only. Never raise the configured permission ceiling or answer approvals/questions without the user's explicit decision.

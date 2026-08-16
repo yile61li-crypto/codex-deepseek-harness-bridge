@@ -40,6 +40,7 @@ After installation, start a new Codex task so the MCP tool catalog is refreshed.
 | `dsh_ensure_runtime` | Reuse a healthy runtime or safely start local DSH. |
 | `dsh_health` | Check DSH plus bridge policy and optional capabilities. |
 | `dsh_list_workspaces` | List registered workspaces and grouped session ids. |
+| `dsh_create_workspace` | Explicitly register an existing directory as a new workspace/group. |
 | `dsh_list_agent_presets` | List available and broken agent presets. |
 | `dsh_list_sessions` | List and filter recent sessions. |
 | `dsh_get_session` | Read one exact session and optional bounded history. |
@@ -71,6 +72,9 @@ silently write to the wrong DSH conversation.
 - To start new work, choose a registered `workspace_id` or an absolute `cwd`. If neither a tool
   argument nor an installation default exists, `dsh_start_task` fails with `task-target-required`;
   Codex should list workspaces/sessions and ask the user what to do.
+- Creating a workspace/group is allowed only through the separate `dsh_create_workspace` tool after
+  the user explicitly requests it. The required `user_confirmed=true` flag must never be inferred;
+  the tool registers an existing absolute directory and never creates or deletes filesystem content.
 - Writable permissions require a registered `workspace_id`. An arbitrary `cwd` is accepted only
   for `read-only`, preventing a model-selected path from enlarging the write sandbox.
 
