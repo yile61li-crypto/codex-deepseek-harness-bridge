@@ -1,4 +1,4 @@
 interface:
   display_name: "DeepSeek Harness"
   short_description: "Reuse related DSH sessions and relay images"
-  default_prompt: "Open DeepSeek Harness in Codex and continue a related exact session unless a new conversation is truly needed."
+  default_prompt: "Use $deepseek-harness to open DSH and continue a related exact session unless a new conversation is truly needed."

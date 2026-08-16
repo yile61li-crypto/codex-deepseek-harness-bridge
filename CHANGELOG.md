@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-17
+
+### Added
+
+- Default-off workspace registration with administrator-controlled canonical local root allowlists.
+- Configurable prompt-length limits, bounded HTTP response reads, and private managed-runtime log permissions.
+- Packed-artifact installation and MCP discovery smoke testing, official-registry production dependency auditing, and npm Dependabot coverage.
+
+### Changed
+
+- `dsh_start_task` can no longer adopt an existing session id; new sessions and exact-session continuation now have separate public tool contracts.
+- Persisted default permission changes are refreshed by already-running bridge processes before future task creation and policy reporting.
+- Public compatibility claims now cover only the pinned DSH `0.1.0-rc.6` release candidate.
+- Permission-ceiling documentation now describes bridge request-boundary enforcement and the non-atomic interaction with other trusted local DSH clients.
+- Visual relay and opt-in MCP approval/question responses are explicitly labeled experimental.
+- Plugin validation now ships inside the npm archive, and all public version surfaces report `0.6.0`.
+
+### Security
+
+- Workspace registration rejects filesystem roots, remote/device paths, and targets outside configured allowed roots.
+- Attachment and generic RPC responses are rejected before unbounded response allocation.
+
 ## [0.5.1] - 2026-08-17
 
 ### Changed

@@ -40,7 +40,7 @@ body:
     id: dsh-version
     attributes:
       label: DeepSeek Harness version
-      placeholder: 0.1.0-rc.5
+      placeholder: 0.1.0-rc.6
     validations:
       required: true
 

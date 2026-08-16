@@ -111,6 +111,57 @@ describe('PermissionSettings loading', () => {
 })
 
 describe('PermissionSettings updates', () => {
+  it('refreshes changes from another instance and falls back after deletion', async () => {
+    const settingsPath = await fixturePath()
+    const writer = new PermissionSettings({
+      env: { DSH_SETTINGS_FILE: settingsPath },
+      maxPermission: 'danger-full-access',
+      installationDefault: 'read-only',
+    })
+    const reader = new PermissionSettings({
+      env: { DSH_SETTINGS_FILE: settingsPath },
+      maxPermission: 'workspace-write',
+      installationDefault: 'danger-full-access',
+    })
+
+    await writer.setDefault('read-only')
+    assert.deepEqual(await reader.refresh(), {
+      defaultPermission: 'read-only',
+      previousDefaultPermission: 'workspace-write',
+      persisted: true,
+      settingsPath,
+    })
+
+    await writer.setDefault('danger-full-access')
+    assert.equal((await reader.refresh()).defaultPermission, 'workspace-write')
+    assert.equal(reader.defaultPermission, 'workspace-write')
+
+    await rm(settingsPath)
+    assert.deepEqual(await reader.refresh(), {
+      defaultPermission: 'workspace-write',
+      previousDefaultPermission: 'workspace-write',
+      persisted: false,
+      settingsPath,
+    })
+  })
+
+  it('fails closed on a corrupt refresh without changing memory', async () => {
+    const settingsPath = await fixturePath()
+    const writer = new PermissionSettings({ env: { DSH_SETTINGS_FILE: settingsPath } })
+    const reader = new PermissionSettings({ env: { DSH_SETTINGS_FILE: settingsPath } })
+
+    await writer.setDefault('workspace-write')
+    await reader.refresh()
+    await writeFile(settingsPath, '{not-json')
+
+    await assert.rejects(
+      reader.refresh(),
+      error => error instanceof PermissionSettingsError
+        && error.code === 'permission-settings-invalid',
+    )
+    assert.equal(reader.defaultPermission, 'workspace-write')
+  })
+
   it('atomically persists a default and immediately updates memory', async () => {
     const settingsPath = await fixturePath()
     const settings = new PermissionSettings({

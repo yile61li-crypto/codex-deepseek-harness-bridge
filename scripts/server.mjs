@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 
 import { createInterface } from 'node:readline'
-import { isAbsolute, parse, resolve } from 'node:path'
+import { realpath, stat } from 'node:fs/promises'
+import { isAbsolute, parse, relative, resolve, sep } from 'node:path'
 import { DshClient, DshRpcError, parsePermissionPreset } from '../src/dsh-client.mjs'
 import { DshRuntimeError, DshRuntimeManager } from '../src/dsh-runtime.mjs'
 import { PermissionSettings, PermissionSettingsError } from '../src/permission-settings.mjs'
 
-const SERVER_INFO = { name: 'deepseek-harness-bridge', version: '0.5.1' }
+const SERVER_INFO = { name: 'deepseek-harness-bridge', version: '0.6.0' }
 const SUPPORTED_PROTOCOLS = new Set(['2024-11-05', '2025-03-26', '2025-06-18'])
 const PERMISSION_RANK = Object.freeze({ 'read-only': 0, 'workspace-write': 1, 'danger-full-access': 2 })
 const MCP_IMAGE_RESULT = Symbol('mcp-image-result')
@@ -38,6 +39,47 @@ function optionalEnv(name) {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined
 }
 
+function stringArrayJsonEnv(name) {
+  const value = process.env[name]
+  if (value === undefined || value === '') return []
+  let parsed
+  try { parsed = JSON.parse(value) } catch {
+    throw new Error(`${name} must be a JSON array of absolute directory paths`)
+  }
+  if (!Array.isArray(parsed) || parsed.some(item => typeof item !== 'string' || item.trim() === '')) {
+    throw new Error(`${name} must be a JSON array of absolute directory paths`)
+  }
+  return [...new Set(parsed.map(item => item.trim()))]
+}
+
+function isNetworkOrDevicePath(value) {
+  return value.startsWith('\\\\') || value.startsWith('//')
+}
+
+async function canonicalConfiguredRoots(values) {
+  const roots = []
+  for (const value of values) {
+    if (isNetworkOrDevicePath(value) || !isAbsolute(value)) {
+      throw new Error('DSH_ALLOWED_WORKSPACE_ROOTS_JSON entries must be absolute local paths')
+    }
+    const normalized = resolve(value)
+    if (normalized === parse(normalized).root) {
+      throw new Error('DSH_ALLOWED_WORKSPACE_ROOTS_JSON must not contain a filesystem root')
+    }
+    let canonical
+    let metadata
+    try {
+      canonical = await realpath(normalized)
+      metadata = await stat(canonical)
+    } catch {
+      throw new Error('DSH_ALLOWED_WORKSPACE_ROOTS_JSON entries must be existing directories')
+    }
+    if (!metadata.isDirectory()) throw new Error('DSH_ALLOWED_WORKSPACE_ROOTS_JSON entries must be directories')
+    roots.push(canonical)
+  }
+  return [...new Set(roots)]
+}
+
 const APPROVAL_RESPONSES_ENABLED = booleanEnv('DSH_ENABLE_APPROVAL_RESPONSES')
 const QUESTION_RESPONSES_ENABLED = booleanEnv('DSH_ENABLE_QUESTION_RESPONSES')
 const INSTALLATION_DEFAULT_PERMISSION = parsePermissionPreset(process.env.DSH_DEFAULT_PERMISSION ?? 'read-only')
@@ -48,12 +90,21 @@ const MAX_CONCURRENT_WAITS = integerEnv('DSH_MAX_CONCURRENT_WAITS', 4, 1, 32)
 const MODEL_REQUESTS_PER_MINUTE = integerEnv('DSH_MODEL_REQUESTS_PER_MINUTE', 12, 1, 120)
 const RUNTIME_START_TIMEOUT_MS = integerEnv('DSH_RUNTIME_START_TIMEOUT_MS', 30_000, 1_000, 120_000)
 const MAX_ATTACHMENT_BYTES = integerEnv('DSH_MAX_ATTACHMENT_BYTES', 5 * 1024 * 1024, 1, 25 * 1024 * 1024)
+const MAX_PROMPT_CHARS = integerEnv('DSH_MAX_PROMPT_CHARS', 50_000, 1_000, 1_000_000)
+const WORKSPACE_CREATION_ENABLED = booleanEnv('DSH_ENABLE_WORKSPACE_CREATION')
+const CONFIGURED_WORKSPACE_ROOTS = stringArrayJsonEnv('DSH_ALLOWED_WORKSPACE_ROOTS_JSON')
 if (PERMISSION_RANK[INSTALLATION_DEFAULT_PERMISSION] > PERMISSION_RANK[MAX_PERMISSION]) {
   throw new Error('DSH_DEFAULT_PERMISSION must not exceed DSH_MAX_PERMISSION')
 }
 if (DEFAULT_CWD !== undefined && DEFAULT_WORKSPACE_ID !== undefined) {
   throw new Error('DSH_DEFAULT_CWD and DSH_DEFAULT_WORKSPACE_ID are mutually exclusive')
 }
+if (WORKSPACE_CREATION_ENABLED && CONFIGURED_WORKSPACE_ROOTS.length === 0) {
+  throw new Error('DSH_ENABLE_WORKSPACE_CREATION=true requires DSH_ALLOWED_WORKSPACE_ROOTS_JSON')
+}
+const ALLOWED_WORKSPACE_ROOTS = WORKSPACE_CREATION_ENABLED
+  ? await canonicalConfiguredRoots(CONFIGURED_WORKSPACE_ROOTS)
+  : []
 const runtime = new DshRuntimeManager({
   baseUrl: client.baseUrl.origin,
   env: process.env,
@@ -78,8 +129,12 @@ function bridgePolicy() {
     modelRequestsPerMinute: MODEL_REQUESTS_PER_MINUTE,
     runtimeStartTimeoutMs: RUNTIME_START_TIMEOUT_MS,
     maxAttachmentBytes: MAX_ATTACHMENT_BYTES,
+    maxPromptChars: MAX_PROMPT_CHARS,
+    workspaceCreationEnabled: WORKSPACE_CREATION_ENABLED,
+    allowedWorkspaceRootCount: ALLOWED_WORKSPACE_ROOTS.length,
     conversationRouting: 'reuse-related-exact-session',
     implicitGlobalLastSession: false,
+    permissionCeilingEnforcement: 'bridge-request-boundary-non-atomic',
   }
 }
 
@@ -124,7 +179,7 @@ const tools = [
   },
   {
     name: 'dsh_create_workspace',
-    description: 'Register an existing local directory as a new DSH workspace/group. Call only after the user explicitly requested creation; never use it as an automatic fallback.',
+    description: 'Register an existing local directory as a new DSH workspace/group. Requires the operator-enabled creation gate, an allowed canonical root, and explicit user confirmation; never use it as an automatic fallback.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -134,7 +189,7 @@ const tools = [
       required: ['path', 'user_confirmed'],
       additionalProperties: false,
     },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   },
   {
     name: 'dsh_list_agent_presets',
@@ -195,11 +250,10 @@ const tools = [
     inputSchema: {
       type: 'object',
       properties: {
-        task: { type: 'string', minLength: 1, description: 'Task sent to DeepSeek Harness.' },
+        task: { type: 'string', minLength: 1, maxLength: MAX_PROMPT_CHARS, description: 'Task sent to DeepSeek Harness.' },
         cwd: { type: 'string', minLength: 1, description: 'Absolute workspace path used by DSH.' },
         workspace_id: { type: 'string', minLength: 1, description: 'Existing DSH workspace id; mutually exclusive with cwd.' },
         agent_preset: { type: 'string', minLength: 1, description: 'Optional explicit preset. Omit to use the DSH deployment default.' },
-        session_id: { type: 'string', minLength: 1, description: 'Optional caller-supplied session id.' },
         permission: {
           type: 'string', enum: ['read-only', 'workspace-write', 'danger-full-access'],
           description: 'Session permission set before submission. It must not exceed DSH_MAX_PERMISSION; write modes require a registered workspace_id.',
@@ -251,7 +305,7 @@ const tools = [
       type: 'object',
       properties: {
         session_id: { type: 'string', minLength: 1 },
-        message: { type: 'string', minLength: 1 },
+        message: { type: 'string', minLength: 1, maxLength: MAX_PROMPT_CHARS },
         mode: { type: 'string', enum: ['queue', 'steer'], default: 'queue' },
       },
       required: ['session_id', 'message'],
@@ -457,6 +511,45 @@ function validatedCwd(value) {
   return normalized
 }
 
+function isWithinRoot(candidate, root) {
+  const pathFromRoot = relative(root, candidate)
+  return pathFromRoot === '' || (
+    pathFromRoot !== '..' &&
+    !pathFromRoot.startsWith(`..${sep}`) &&
+    !isAbsolute(pathFromRoot)
+  )
+}
+
+async function validatedWorkspaceCreationPath(value) {
+  if (!WORKSPACE_CREATION_ENABLED) {
+    throw new DshRpcError('Workspace creation is disabled by the bridge operator', {
+      code: 'workspace-creation-disabled',
+      details: { requiredEnvironment: 'DSH_ENABLE_WORKSPACE_CREATION=true' },
+    })
+  }
+  if (isNetworkOrDevicePath(value)) {
+    throw new DshRpcError('Workspace creation requires a local directory path', { code: 'invalid-workspace-target' })
+  }
+  const normalized = validatedCwd(value)
+  let canonical
+  let metadata
+  try {
+    canonical = await realpath(normalized)
+    metadata = await stat(canonical)
+  } catch {
+    throw new DshRpcError('Workspace creation requires an existing directory', { code: 'invalid-workspace-target' })
+  }
+  if (!metadata.isDirectory()) {
+    throw new DshRpcError('Workspace creation requires a directory', { code: 'invalid-workspace-target' })
+  }
+  if (!ALLOWED_WORKSPACE_ROOTS.some(root => isWithinRoot(canonical, root))) {
+    throw new DshRpcError('Workspace path is outside the operator-configured roots', {
+      code: 'workspace-target-not-allowed',
+    })
+  }
+  return canonical
+}
+
 function resolveTaskTarget(args, permission) {
   const explicitCwd = optionalString(args, 'cwd')
   const explicitWorkspaceId = optionalString(args, 'workspace_id')
@@ -531,12 +624,13 @@ async function callTool(name, args, signal) {
     case 'dsh_ensure_runtime':
       return runtime.ensure({ signal })
     case 'dsh_health': {
+      await permissionSettings.refresh()
       const health = await client.health({ signal })
       const optional = await Promise.allSettled([client.listWorkspaces({ signal }), client.listAgentPresets({ signal })])
       return {
         ...health,
         reportedHostApiVersion: health.host?.version ?? null,
-        testedDshVersions: ['0.1.0-rc.5', '0.1.0-rc.6'],
+        testedDshVersions: ['0.1.0-rc.6'],
         optionalCapabilities: {
           workspaces: optional[0].status === 'fulfilled', agentPresets: optional[1].status === 'fulfilled',
         },
@@ -554,7 +648,7 @@ async function callTool(name, args, signal) {
     case 'dsh_list_workspaces':
       return client.listWorkspaces({ signal })
     case 'dsh_create_workspace':
-      return client.createWorkspace(validatedCwd(requireString(args, 'path')), { signal })
+      return client.createWorkspace(await validatedWorkspaceCreationPath(requireString(args, 'path')), { signal })
     case 'dsh_list_agent_presets':
       return client.listAgentPresets({ signal })
     case 'dsh_list_sessions': {
@@ -597,17 +691,23 @@ async function callTool(name, args, signal) {
       return client.getModels(requireString(args, 'session_id'), { signal })
     case 'dsh_start_task': {
       const task = requireString(args, 'task')
+      if (args?.permission === undefined) await permissionSettings.refresh()
       const permission = ensurePermissionAllowed(permissionFrom(args, 'permission', permissionSettings.defaultPermission))
       const target = resolveTaskTarget(args, permission)
       consumeModelRequestQuota()
       const created = await client.createSession({
         ...target,
-        sessionId: optionalString(args, 'session_id'),
         agentPreset: optionalString(args, 'agent_preset'),
       }, { signal })
       try {
         await client.setPermission(created.sessionId, permission, { signal })
         const baseline = await client.getSession(created.sessionId, { signal })
+        if (baseline.permissions !== permission) {
+          throw new DshRpcError('DSH did not apply the requested permission before prompt submission', {
+            code: 'permission-not-applied',
+            details: { requested: permission, observed: baseline.permissions },
+          })
+        }
         const accepted = await client.prompt(created.sessionId, task, { mode: 'queue', signal })
         return {
           ...created, ...target, permission, accepted: accepted.accepted === true,
@@ -653,10 +753,18 @@ async function callTool(name, args, signal) {
         client.getSession(sessionId, { signal }), client.listWorkspaces({ signal }),
       ])
       ensureSessionWithinPolicy(baseline, workspaces)
+      const verified = await client.getSession(sessionId, { signal })
+      ensureSessionWithinPolicy(verified, workspaces)
+      if (verified.permissions !== baseline.permissions) {
+        throw new DshRpcError('Session permission changed while preparing the prompt; retry after it stabilizes', {
+          code: 'session-permission-changed',
+          details: { before: baseline.permissions, observed: verified.permissions },
+        })
+      }
       consumeModelRequestQuota()
       return {
         sessionId, ...(await client.prompt(sessionId, message, { mode, signal })),
-        waitAfterSeq: baseline.lastSeq ?? -1, continueWith: { tool: 'dsh_send', sessionId },
+        waitAfterSeq: verified.lastSeq ?? -1, continueWith: { tool: 'dsh_send', sessionId },
       }
     }
     case 'dsh_wait': {

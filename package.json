@@ -1,6 +1,6 @@
 {
   "name": "codex-deepseek-harness-bridge",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "A local-first MCP bridge that lets Codex operate visible DeepSeek Harness sessions.",
   "type": "module",
   "license": "MIT",
@@ -43,12 +43,13 @@
     "access": "public"
   },
   "scripts": {
-    "check": "node --check scripts/server.mjs && node --check scripts/live-probe.mjs && node --check scripts/mcp-live-probe.mjs && node --check src/dsh-client.mjs",
+    "check": "node --check scripts/server.mjs && node --check scripts/live-probe.mjs && node --check scripts/mcp-live-probe.mjs && node --check scripts/package-smoke.mjs && node --check scripts/validate-plugin.mjs && node --check src/dsh-client.mjs && node --check src/dsh-runtime.mjs && node --check src/permission-settings.mjs",
     "test": "node --test",
     "test:live": "node scripts/live-probe.mjs",
     "test:mcp-live": "node scripts/mcp-live-probe.mjs",
-    "validate:plugin": "node .github/scripts/validate-plugin.mjs",
+    "validate:plugin": "node scripts/validate-plugin.mjs",
     "verify": "npm run check && npm test && npm run validate:plugin",
-    "pack:dry-run": "npm pack --dry-run"
+    "pack:dry-run": "npm pack --dry-run",
+    "package:smoke": "node scripts/package-smoke.mjs"
   }
 }

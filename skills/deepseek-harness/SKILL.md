@@ -1,6 +1,6 @@
 ---
 name: deepseek-harness
-description: Start, open, inspect, and operate DeepSeek Harness from Codex. Use when the user asks to open or view DSH in Codex, start its local Web runtime, delegate a task, decide whether related work should reuse an exact DSH conversation, handle a DSH approval or question, or analyze a DSH image attachment through an isolated Codex vision subagent.
+description: Start, open, inspect, and operate DeepSeek Harness from Codex. Use when the user asks to open or view DSH in Codex, start its local Web runtime, delegate a task, decide whether related work should reuse an exact DSH conversation, handle a DSH approval or question, or experimentally analyze a DSH image attachment through an isolated Codex vision subagent.
 ---
 
 # DeepSeek Harness
@@ -23,14 +23,14 @@ Keep the page visible when the user asks to watch DSH work.
 - Use `dsh_start_task` only when the user explicitly requests a new conversation, the objective is materially unrelated, the workspace or trust boundary differs, or an independent parallel task needs isolated progress. Select an existing `workspace_id`; never create an ungrouped session.
 - With no task-local binding, inspect bounded session metadata/history. Continue without asking only when one candidate has strong evidence of the same workspace and objective. If multiple candidates are plausible or relevance is uncertain, ask one short question before sending or starting anything.
 - Prefer the user's explicit session choice over these heuristics. Never merge unrelated tasks merely to avoid creating a session, and never fork solely as a substitute for ordinary continuation.
-- Call `dsh_create_workspace` only when the user explicitly asks to create/register a new workspace or group and supplies or confirms its existing absolute directory. Set `user_confirmed=true` only for that explicit request. Otherwise list existing workspaces and ask; never create one as a fallback.
+- Call `dsh_create_workspace` only when the user explicitly asks to create/register a new workspace or group and supplies or confirms its existing absolute local directory. Set `user_confirmed=true` only for that explicit request. The installation must also enable workspace creation and configure non-empty allowed roots; use `dsh_health` to inspect that policy and report the disabled/allowlist boundary instead of trying another path. Otherwise list existing workspaces and ask; never create one as a fallback.
 - Call `dsh_set_default_permission` only when the user explicitly asks to change the persistent default. Set `user_confirmed=true` only for that request. Explain that it affects future tasks, not existing sessions, and still cannot exceed the installation maximum.
 - Pass `promptRpcId` and `waitAfterSeq` from start/send into `dsh_wait` so an earlier turn cannot be mistaken for the requested result.
-- Default to read-only. Never raise the configured permission ceiling or answer approvals/questions without the user's explicit decision.
+- Default to read-only. Never raise the configured permission ceiling or answer approvals/questions without the user's explicit decision. MCP approval/question responses are advanced experimental controls, disabled by default, and are not an out-of-band human-consent channel; prefer the visible DSH Web UI.
 
-## Analyze DSH images without loading them into the main conversation
+## Experimentally analyze DSH images without loading them into the main conversation
 
-When `dsh_wait` or `dsh_history` returns image attachment metadata:
+This path is experimental. When `dsh_wait` or `dsh_history` returns image attachment metadata:
 
 1. The parent MUST NOT call `dsh_get_attachment`. Keep the original image and its Base64 out of the main conversation.
 2. Spawn a generic Codex collaboration subagent with `fork_turns="none"`; do not create a user-owned task. Give it only the exact `session_id`, requested attachment IDs, the user's visual question, and the output contract below.

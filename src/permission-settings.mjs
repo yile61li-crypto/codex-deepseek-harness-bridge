@@ -97,9 +97,10 @@ function loadPersistedDefault(settingsPath) {
 
 export class PermissionSettings {
   #defaultPermission
+  #installationDefault
   #maxPermission
+  #operations = Promise.resolve()
   #settingsPath
-  #writes = Promise.resolve()
 
   constructor({
     env = process.env,
@@ -108,9 +109,13 @@ export class PermissionSettings {
   } = {}) {
     this.#maxPermission = invalidPermission(maxPermission, 'maxPermission')
     const fallback = invalidPermission(installationDefault, 'installationDefault')
+    this.#installationDefault = capPermission(fallback, this.#maxPermission)
     this.#settingsPath = settingsPathFromEnv(env)
     const persisted = loadPersistedDefault(this.#settingsPath)
-    this.#defaultPermission = capPermission(persisted ?? fallback, this.#maxPermission)
+    this.#defaultPermission = capPermission(
+      persisted ?? this.#installationDefault,
+      this.#maxPermission,
+    )
   }
 
   get defaultPermission() {
@@ -119,6 +124,28 @@ export class PermissionSettings {
 
   get settingsPath() {
     return this.#settingsPath
+  }
+
+  async refresh() {
+    const update = async () => {
+      const persisted = loadPersistedDefault(this.#settingsPath)
+      const previousDefaultPermission = this.#defaultPermission
+      const defaultPermission = capPermission(
+        persisted ?? this.#installationDefault,
+        this.#maxPermission,
+      )
+      this.#defaultPermission = defaultPermission
+      return {
+        defaultPermission,
+        previousDefaultPermission,
+        persisted: persisted !== undefined,
+        settingsPath: this.#settingsPath,
+      }
+    }
+
+    const result = this.#operations.then(update, update)
+    this.#operations = result.then(() => undefined, () => undefined)
+    return result
   }
 
   async setDefault(permission) {
@@ -160,8 +187,8 @@ export class PermissionSettings {
       }
     }
 
-    const result = this.#writes.then(update, update)
-    this.#writes = result.then(() => undefined, () => undefined)
+    const result = this.#operations.then(update, update)
+    this.#operations = result.then(() => undefined, () => undefined)
     return result
   }
 }

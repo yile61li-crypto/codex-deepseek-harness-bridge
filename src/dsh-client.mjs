@@ -4,6 +4,9 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]'])
 const DEFAULT_TIMEOUT_MS = 30_000
 const DEFAULT_HISTORY_CHAR_LIMIT = 30_000
 const DEFAULT_MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
+const DEFAULT_MAX_RPC_RESPONSE_BYTES = 16 * 1024 * 1024
+const MAX_RPC_RESPONSE_BYTES = 64 * 1024 * 1024
+const ATTACHMENT_RESPONSE_OVERHEAD_BYTES = 64 * 1024
 const MAX_ATTACHMENT_ID_CHARS = 512
 const MAX_ATTACHMENT_NAME_CHARS = 256
 const USER_ACTION_SETTLE_DELAY_MS = 25
@@ -45,6 +48,100 @@ export function normalizeBaseUrl(value = 'http://127.0.0.1:3080') {
 function combinedSignal(signal, timeoutMs) {
   const timeout = AbortSignal.timeout(timeoutMs)
   return signal === undefined ? timeout : AbortSignal.any([signal, timeout])
+}
+
+function checkedResponseLimit(value) {
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_RPC_RESPONSE_BYTES) {
+    throw new DshRpcError(`maxResponseBytes must be an integer from 1 to ${MAX_RPC_RESPONSE_BYTES}`, {
+      code: 'invalid-argument', details: { maxResponseBytes: value },
+    })
+  }
+  return value
+}
+
+function requestAbortCode(signal, activeSignal, error) {
+  if (signal?.aborted === true) return 'cancelled'
+  if (error?.name === 'TimeoutError' || activeSignal?.reason?.name === 'TimeoutError') return 'timeout'
+  return null
+}
+
+function oversizedResponseError(method, maxBytes, {
+  code = 'response-too-large', message, details = {}, contentLength, receivedBytes,
+} = {}) {
+  return new DshRpcError(
+    message ?? `DeepSeek Harness response exceeds the ${maxBytes}-byte limit for ${method}`,
+    {
+      code,
+      method,
+      details: {
+        ...details,
+        maxResponseBytes: maxBytes,
+        ...(contentLength === undefined ? {} : { contentLength }),
+        ...(receivedBytes === undefined ? {} : { receivedBytes }),
+      },
+    },
+  )
+}
+
+async function readBoundedJson(response, {
+  method, maxBytes, signal, activeSignal, tooLarge = {}, invalidMessage,
+}) {
+  const limit = checkedResponseLimit(maxBytes)
+  const contentLengthValue = response.headers.get('content-length')
+  if (contentLengthValue !== null && /^\d+$/.test(contentLengthValue)
+      && BigInt(contentLengthValue) > BigInt(limit)) {
+    await response.body?.cancel().catch(() => {})
+    throw oversizedResponseError(method, limit, {
+      ...tooLarge,
+      contentLength: contentLengthValue,
+    })
+  }
+
+  const reader = response.body?.getReader()
+  if (reader === undefined) {
+    throw new DshRpcError(invalidMessage ?? `DeepSeek Harness returned an empty response for ${method}`, {
+      code: 'invalid-response', method,
+    })
+  }
+  const chunks = []
+  let receivedBytes = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      receivedBytes += value.byteLength
+      if (receivedBytes > limit) {
+        await reader.cancel().catch(() => {})
+        throw oversizedResponseError(method, limit, { ...tooLarge, receivedBytes })
+      }
+      chunks.push(value)
+    }
+  } catch (error) {
+    if (error instanceof DshRpcError) throw error
+    const abortCode = requestAbortCode(signal, activeSignal, error)
+    if (abortCode !== null) {
+      throw new DshRpcError(
+        abortCode === 'cancelled'
+          ? `DeepSeek Harness request was cancelled: ${method}`
+          : `DeepSeek Harness request timed out: ${method}`,
+        { code: abortCode, method },
+      )
+    }
+    throw new DshRpcError(`${invalidMessage ?? `DeepSeek Harness returned an invalid response for ${method}`}: ${String(error)}`, {
+      code: 'invalid-response', method,
+    })
+  } finally {
+    reader.releaseLock()
+  }
+
+  const body = Buffer.concat(chunks, receivedBytes).toString('utf8')
+  try {
+    return JSON.parse(body)
+  } catch (error) {
+    throw new DshRpcError(`${invalidMessage ?? `DeepSeek Harness returned invalid JSON for ${method}`}: ${String(error)}`, {
+      code: 'invalid-response', method,
+    })
+  }
 }
 
 export function parsePermissionPreset(value) {
@@ -287,25 +384,39 @@ function publicSession(item) {
 }
 
 export class DshClient {
-  constructor({ baseUrl = process.env.DSH_WEB_URL ?? 'http://127.0.0.1:3080', timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  constructor({
+    baseUrl = process.env.DSH_WEB_URL ?? 'http://127.0.0.1:3080',
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    maxResponseBytes = DEFAULT_MAX_RPC_RESPONSE_BYTES,
+  } = {}) {
     this.baseUrl = normalizeBaseUrl(baseUrl)
     this.timeoutMs = timeoutMs
+    this.maxResponseBytes = checkedResponseLimit(maxResponseBytes)
   }
 
-  async rpc(method, payload, { signal, timeoutMs = this.timeoutMs, includeRpcId = false } = {}) {
+  async rpc(method, payload, {
+    signal,
+    timeoutMs = this.timeoutMs,
+    includeRpcId = false,
+    maxResponseBytes = this.maxResponseBytes,
+    responseTooLarge,
+  } = {}) {
     const rpcId = randomUUID()
+    const responseLimit = checkedResponseLimit(maxResponseBytes)
+    const activeSignal = combinedSignal(signal, timeoutMs)
     const response = await fetch(new URL(`/api/${method}`, this.baseUrl), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ type: 'client-request', rpcId, method, payload }),
-      signal: combinedSignal(signal, timeoutMs),
+      signal: activeSignal,
     }).catch(error => {
-      if (signal?.aborted === true) {
+      const abortCode = requestAbortCode(signal, activeSignal, error)
+      if (abortCode === 'cancelled') {
         throw new DshRpcError(`DeepSeek Harness request was cancelled: ${method}`, {
           code: 'cancelled', method,
         })
       }
-      if (error?.name === 'TimeoutError') {
+      if (abortCode === 'timeout') {
         throw new DshRpcError(`DeepSeek Harness request timed out: ${method}`, {
           code: 'timeout', method,
         })
@@ -321,10 +432,13 @@ export class DshClient {
       })
     }
 
-    const envelope = await response.json().catch(error => {
-      throw new DshRpcError(`DeepSeek Harness returned invalid JSON for ${method}: ${String(error)}`, {
-        code: 'invalid-response', method,
-      })
+    const envelope = await readBoundedJson(response, {
+      method,
+      maxBytes: responseLimit,
+      signal,
+      activeSignal,
+      tooLarge: responseTooLarge,
+      invalidMessage: `DeepSeek Harness returned invalid JSON for ${method}`,
     })
     if (envelope?.type !== 'server-response' || envelope.rpcId !== rpcId || typeof envelope.result?.ok !== 'boolean') {
       throw new DshRpcError(`DeepSeek Harness returned an invalid RPC envelope for ${method}`, {
@@ -389,12 +503,24 @@ export class DshClient {
     if (id.length > MAX_ATTACHMENT_ID_CHARS) {
       throw new DshRpcError('attachmentId is too long', { code: 'invalid-argument' })
     }
-    if (!Number.isInteger(maxBytes) || maxBytes < 1) {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
       throw new DshRpcError('maxBytes must be a positive integer', { code: 'invalid-argument' })
     }
+    const maxResponseBytes = Math.min(
+      MAX_RPC_RESPONSE_BYTES,
+      Math.ceil(maxBytes / 3) * 4 + ATTACHMENT_RESPONSE_OVERHEAD_BYTES,
+    )
     const value = await this.rpc('session.attachment', {
       sessionId: requireWireString(sessionId, 'sessionId'), attachmentId: id,
-    }, { signal })
+    }, {
+      signal,
+      maxResponseBytes,
+      responseTooLarge: {
+        code: 'attachment-too-large',
+        message: 'DSH attachment exceeds this bridge instance\'s image limit',
+        details: { attachmentId: id, maxBytes },
+      },
+    })
     const attachment = publicImageAttachmentRef(value?.attachment)
     if (attachment === null || attachment.attachmentId !== id || typeof value?.data !== 'string'
         || value.data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value.data)) {
@@ -517,13 +643,14 @@ export class DshClient {
 
   async postResponse(rpcId, result, { signal, timeoutMs = this.timeoutMs } = {}) {
     requireWireString(rpcId, 'rpcId')
+    const activeSignal = combinedSignal(signal, timeoutMs)
     const response = await fetch(new URL('/api/respond', this.baseUrl), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ type: 'client-response', rpcId, result }),
-      signal: combinedSignal(signal, timeoutMs),
+      signal: activeSignal,
     }).catch(error => {
-      const code = signal?.aborted === true ? 'cancelled' : error?.name === 'TimeoutError' ? 'timeout' : 'connection-failed'
+      const code = requestAbortCode(signal, activeSignal, error) ?? 'connection-failed'
       throw new DshRpcError(`Cannot answer DeepSeek Harness request: ${String(error)}`, {
         code, method: 'respond',
       })
@@ -533,10 +660,12 @@ export class DshClient {
         code: 'http-error', method: 'respond', details: { status: response.status },
       })
     }
-    const receipt = await response.json().catch(error => {
-      throw new DshRpcError(`DeepSeek Harness returned an invalid response receipt: ${String(error)}`, {
-        code: 'invalid-response', method: 'respond',
-      })
+    const receipt = await readBoundedJson(response, {
+      method: 'respond',
+      maxBytes: this.maxResponseBytes,
+      signal,
+      activeSignal,
+      invalidMessage: 'DeepSeek Harness returned an invalid response receipt',
     })
     if (receipt?.accepted === true) return { accepted: true, state: 'resolved' }
     if (receipt?.reason === 'not-pending') return { accepted: false, state: 'already_resolved' }

@@ -16,11 +16,14 @@ Fork and clone the repository, then run:
 ```bash
 npm run verify
 npm run pack:dry-run
+npm run package:smoke
 ```
 
-The project has no runtime npm dependencies. `npm run verify` performs syntax checks, unit and MCP
-protocol tests, and a repository-local plugin manifest validation. It does not require a developer's
-personal Codex installation or an absolute path outside the repository.
+The project pins `@deepseek-ai/dsh` as a runtime dependency so managed startup is reproducible.
+`npm run verify` performs syntax checks, unit and MCP protocol tests, and the packaged plugin
+manifest validator. It does not require a developer's personal Codex installation or an absolute
+path outside the repository. `npm run package:smoke` packs and installs the publishable archive,
+runs its verification command, and probes MCP initialization plus tool discovery.
 
 Live tests are separate because they connect to a running local DSH instance:
 
@@ -37,7 +40,7 @@ Never make the ordinary test suite depend on a live model, network service, user
 2. Add or update deterministic tests before changing protocol or safety behavior.
 3. Preserve loopback-only networking and explicit permission boundaries.
 4. Run `npm run verify` on a supported platform.
-5. Inspect the archive with `npm run pack:dry-run` before requesting review.
+5. Inspect and exercise the archive with `npm run pack:dry-run` and `npm run package:smoke` before requesting review.
 
 Do not silently approve tools, broaden `danger-full-access`, persist approval decisions, or include
 credentials and private prompts in test fixtures. Any new privileged behavior must default off and
@@ -69,6 +72,9 @@ publishing a release, maintainers should:
 2. finalize the matching changelog section and date;
 3. run the Windows and Linux CI matrix;
 4. inspect `npm run pack:dry-run` output;
-5. configure the Git remote, then add verified `repository`, `homepage`, and `bugs` metadata to
+5. run `npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org` and
+   `npm run package:smoke`;
+6. configure the Git remote, then add verified `repository`, `homepage`, and `bugs` metadata to
    `package.json`—never publish placeholder URLs;
-6. tag the exact reviewed commit.
+7. enable GitHub private vulnerability reporting or document another verified private contact;
+8. tag the exact reviewed commit.

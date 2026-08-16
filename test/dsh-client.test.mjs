@@ -28,10 +28,25 @@ describe('RPC client', () => {
       requests.push({ path: request.url, message })
       response.setHeader('content-type', 'application/json')
       if (request.url === '/api/respond') {
+        if (message.rpcId === 'rpc-oversized') {
+          response.write('x'.repeat(96))
+          response.end('y'.repeat(96))
+          return
+        }
         response.end(JSON.stringify({ accepted: true }))
         return
       }
-      if (message.method === 'session.list') {
+      if (message.method === 'oversized.content-length') {
+        response.setHeader('content-length', '1024')
+        response.end('x'.repeat(1024))
+      } else if (message.method === 'oversized.chunked') {
+        response.write('x'.repeat(96))
+        response.end('y'.repeat(96))
+      } else if (message.method === 'slow.body') {
+        response.write(' ')
+        const timer = setTimeout(() => response.end(' '), 100)
+        response.once('close', () => clearTimeout(timer))
+      } else if (message.method === 'session.list') {
         response.end(JSON.stringify({
           type: 'server-response', rpcId: message.rpcId,
           result: { ok: true, value: { items: [{
@@ -75,6 +90,11 @@ describe('RPC client', () => {
       } else if (message.method === 'session.rename') {
         response.end(JSON.stringify({ type: 'server-response', rpcId: message.rpcId, result: { ok: true, value: { title: 'New', seq: 11 } } }))
       } else if (message.method === 'session.attachment') {
+        if (message.payload.attachmentId === 'att-chunked-large') {
+          response.write('x'.repeat(40 * 1024))
+          response.end('y'.repeat(40 * 1024))
+          return
+        }
         response.end(JSON.stringify({
           type: 'server-response', rpcId: message.rpcId,
           result: { ok: true, value: {
@@ -187,6 +207,51 @@ describe('RPC client', () => {
     await assert.rejects(
       client.getAttachment('s1', 'att-1', { maxBytes: 3 }),
       error => error.code === 'attachment-too-large',
+    )
+  })
+
+  it('bounds content-length, chunked RPC, and response-carrier bodies', async () => {
+    const client = new DshClient({ baseUrl: origin, maxResponseBytes: 128 })
+    await assert.rejects(
+      client.rpc('oversized.content-length', {}),
+      error => error.code === 'response-too-large'
+        && error.details.maxResponseBytes === 128
+        && error.details.contentLength === '1024',
+    )
+    await assert.rejects(
+      client.rpc('oversized.chunked', {}),
+      error => error.code === 'response-too-large'
+        && error.details.maxResponseBytes === 128
+        && error.details.receivedBytes > 128,
+    )
+    await assert.rejects(
+      client.postResponse('rpc-oversized', { ok: false }),
+      error => error.code === 'response-too-large'
+        && error.method === 'respond'
+        && error.details.receivedBytes > 128,
+    )
+  })
+
+  it('rejects an oversized chunked attachment before parsing or base64 decoding', async () => {
+    const client = new DshClient({ baseUrl: origin })
+    await assert.rejects(
+      client.getAttachment('s1', 'att-chunked-large', { maxBytes: 3 }),
+      error => error.code === 'attachment-too-large'
+        && error.details.attachmentId === 'att-chunked-large'
+        && error.details.maxBytes === 3
+        && error.details.receivedBytes > error.details.maxResponseBytes,
+    )
+  })
+
+  it('preserves caller cancellation and timeout codes while reading a response body', async () => {
+    const client = new DshClient({ baseUrl: origin })
+    const controller = new AbortController()
+    const cancelled = client.rpc('slow.body', {}, { signal: controller.signal })
+    setTimeout(() => controller.abort(new Error('test cancellation')), 10)
+    await assert.rejects(cancelled, error => error.code === 'cancelled')
+    await assert.rejects(
+      client.rpc('slow.body', {}, { timeoutMs: 10 }),
+      error => error.code === 'timeout',
     )
   })
 })

@@ -8,7 +8,7 @@ DSH 进程与会话存储，因此新会话、思考过程、工具调用和最�
 
 - Node.js 22.19 或更高版本。
 - 可使用插件锁定的 `@deepseek-ai/dsh` 依赖；若目标地址已有 DSH，插件会直接复用。
-- DSH Web 的 `session.*` RPC 与事件流和本插件兼容。目前针对 DSH `0.1.0-rc.5` 和 `0.1.0-rc.6` 验证。
+- DSH Web 的 `session.*` RPC 与事件流和本插件兼容。目前仅针对锁定的 DSH `0.1.0-rc.6` 验证。
 
 ## Codex 安装
 
@@ -35,7 +35,7 @@ npm ci --ignore-scripts
 | `dsh_ensure_runtime` | 复用健康运行时；不存在时安全启动本地 DSH。 |
 | `dsh_health` | 检查 DSH、桥安全策略与可选能力。 |
 | `dsh_list_workspaces` | 列出已注册工作区及其会话。 |
-| `dsh_create_workspace` | 在用户明确要求后，把已有目录注册为新的工作区/分组。 |
+| `dsh_create_workspace` | 安装级开关开启后，在用户明确要求下注册允许范围内的已有目录。 |
 | `dsh_set_default_permission` | 在用户明确要求后，持久修改后续任务的默认权限。 |
 | `dsh_list_agent_presets` | 列出可用和损坏的 Agent Preset。 |
 | `dsh_list_sessions` | 列出并筛选最近会话。 |
@@ -72,8 +72,9 @@ npm ci --ignore-scripts
   和目标时才直接续写。多个候选都可能相关、或者关联性不确定时，先向用户问一个简短问题。仅仅“最近使用”
   不能作为选择依据。
 - 只有用户明确要求新建工作区/分组时，才能单独调用 `dsh_create_workspace`，并把
-  `user_confirmed` 设为 `true`；不得自行推断或把它当作无目标时的后备行为。该工具只注册已有绝对目录，
-  不会创建、移动或删除目录内容。
+  `user_confirmed` 设为 `true`；不得自行推断或把它当作无目标时的后备行为。管理员还必须设置
+  `DSH_ENABLE_WORKSPACE_CREATION=true` 并配置非空允许根目录。该工具只注册这些根目录下已有的、规范化的
+  本机目录，不会创建、移动或删除目录内容。
 - 可写权限必须使用已注册的 `workspace_id`；任意 `cwd` 只允许 `read-only`，防止模型通过选择父目录扩大写沙箱。
 
 插件不保存进程级“最后一个会话”，避免多个 Codex 任务并发时写错目标；绑定只属于当前任务。因此
@@ -90,11 +91,14 @@ npm ci --ignore-scripts
 | `DSH_RUNTIME_LOG_DIR` | 用户状态目录 | DSH stdout/stderr 日志目录；不会写入 MCP stdout。 |
 | `DSH_RUNTIME_START_TIMEOUT_MS` | `30000` | 等待 DSH 健康的毫秒数，范围 1000–120000。 |
 | `DSH_MAX_ATTACHMENT_BYTES` | `5242880` | 隔离视觉子 agent 可获取的图片解码后大小上限；可配置为 1–25 MiB。 |
+| `DSH_MAX_PROMPT_CHARS` | `50000` | 新建或续写模型提示可接受的 JavaScript 字符串长度上限；范围 1000–1000000。 |
 | `DSH_DEFAULT_PERMISSION` | `read-only` | 用户尚未持久修改时使用的初始默认权限。 |
-| `DSH_MAX_PERMISSION` | `danger-full-access` | 工具参数无法越过的权限硬上限；需要时可降为 `workspace-write` 或 `read-only`。 |
+| `DSH_MAX_PERMISSION` | `danger-full-access` | 桥接层对请求实施的权限上限；需要时可降为 `workspace-write` 或 `read-only`。 |
 | `DSH_SETTINGS_FILE` | `~/.deepseek-harness-bridge/settings.json` | 可选的持久化桥接设置文件绝对路径。 |
 | `DSH_DEFAULT_WORKSPACE_ID` | 未设置 | 新任务没指定目标时使用的已注册工作区。 |
 | `DSH_DEFAULT_CWD` | 未设置 | 只读任务的默认目录；不能与默认工作区同时设置。 |
+| `DSH_ENABLE_WORKSPACE_CREATION` | `false` | 开启需要用户确认的工作区注册工具；同时要求非空允许根目录。 |
+| `DSH_ALLOWED_WORKSPACE_ROOTS_JSON` | `[]` | JSON 数组，列出可注册工作区所在的已有绝对本机根目录。 |
 | `DSH_ENABLE_APPROVAL_RESPONSES` | `false` | 是否允许通过 MCP 回复审批；关闭时只能在 DSH 网页处理。 |
 | `DSH_ENABLE_QUESTION_RESPONSES` | `false` | 是否允许通过 MCP 回答或取消精确问题批次。 |
 | `DSH_MAX_CONCURRENT_WAITS` | `4` | 限制长连接等待数量。 |
@@ -110,6 +114,10 @@ npm ci --ignore-scripts
 `user_confirmed=true` 不能由模型自行推断；修改默认值或上限都不会改变已有会话。持久设置优先于初始环境值，
 但始终受 `DSH_MAX_PERMISSION` 限制。
 
+该上限作用于桥接请求边界，并不是对 DSH 会话状态的原子锁。同机其他 DSH Web 或 API 客户端仍可能并发地、
+或在桥检查后立即修改同一会话权限。需要稳定权限策略时，应同时管控这些受信任的本机客户端，不能把本桥
+视为对它们的隔离机制。
+
 每次 `dsh_start_task` 都可以用 `permission` 覆盖默认值。插件先创建会话，再调用 DSH 宿主侧
 `/permission <preset>` 命令，成功后才提交模型任务：
 
@@ -121,11 +129,12 @@ npm ci --ignore-scripts
 `dsh_wait` 遇到审批或问题时会返回精确请求身份、内容、观察时间和 `mayBeStale=true`。安全默认下由用户在
 DSH 网页处理。可选 MCP 回复只接受精确的待处理身份；如果已被网页或其他客户端处理，则幂等返回
 `already_resolved`。审批只支持 `allow_once` 或 `reject`，不提供永久授权或自动回答。
+这两个 MCP 回复通道属于高级实验性操作，默认关闭，也不能代替独立的人类授权通道。
 
 `dsh_history` 返回 `firstSeq` 和 `nextBeforeSeq`，下一页应把后者作为排他的 `before_seq`。工具参数和输出
 默认不返回；只有明确设置 `include_tools=true` 才返回，并始终截断，以控制敏感信息和 token 消耗。
 
-### 隔离的视觉回传
+### 实验性的隔离视觉回传
 
 DSH 目前没有可靠的视觉能力，所以 `dsh_wait` 和 `dsh_history` 只把有界的图片元数据交给 Codex 主会话。
 插件 Skill 强制新建一个 `fork_turns="none"` 的 Codex 协作子 agent，由子 agent 调用
@@ -133,7 +142,7 @@ DSH 目前没有可靠的视觉能力，所以 `dsh_wait` 和 `dsh_history` 只�
 把这段文字发回原来的精确 DSH 会话。支持 PNG、JPEG、WebP 和 GIF；桥会校验会话引用、媒体元数据、
 Base64 长度和配置的大小上限。
 
-这是 Skill 明确执行的隔离契约，而不是对调用者身份的加密认证：当前公开插件格式不能注册自定义子 agent
+这是实验性 Skill 明确执行的隔离契约，而不是对调用者身份的加密认证：当前公开插件格式不能注册自定义子 agent
 类型，因此使用 Codex 通用协作子 agent。如果当前环境没有子 agent，Skill 会失败关闭；除非用户明确放弃
 隔离，否则不会退回到主会话读取原图。
 
@@ -152,10 +161,12 @@ npm run check
 npm test
 npm run test:live
 npm run test:mcp-live
+npm run package:smoke
 ```
 
 两个 live probe 都不发送提示词：`test:live` 只读验证 DSH 客户端；`test:mcp-live` 先幂等确保运行时，
-再验证完整的 Codex stdio MCP 链路，因此目标端口为空时可能启动本地 DSH。
+再验证完整的 Codex stdio MCP 链路，因此目标端口为空时可能启动本地 DSH。`package:smoke` 会打包并安装
+实际待发布产物，执行包内验证命令，再探测 MCP 初始化和工具发现。
 
 ## 兼容性说明
 
@@ -171,6 +182,11 @@ Web UI 共用会话。
 插件也不会为了堆工具数量而暴露高权限管理面：切换模型可能同时修改 DSH 保存的默认模型，删除工作区实际
 只会注销元数据，而任意本地路径图片上传会让桥进程绕过 DSH 权限沙箱读取文件。这些能力必须先有独立的
 安全设计，才会成为公开 MCP 工具。
+
+## 项目身份与商标
+
+本项目是独立的社区集成，不隶属于 DeepSeek 或 OpenAI，也未获得两者赞助或背书。DeepSeek、Codex、
+OpenAI 及相关名称仅用于标识本项目所集成的系统；相关商标归各自权利人所有。
 
 ## 许可证
 

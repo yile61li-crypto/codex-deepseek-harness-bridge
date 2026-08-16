@@ -12,7 +12,7 @@ in the DSH Web UI.
 - Node.js 22.19 or newer.
 - The pinned `@deepseek-ai/dsh` dependency, or an already running compatible DSH Web runtime.
 - A DSH version compatible with the developer-preview `session.*` Web RPC and event streams. The
-  bridge is currently tested against DSH `0.1.0-rc.5` and `0.1.0-rc.6`.
+  bridge is currently tested against the pinned DSH `0.1.0-rc.6` release candidate.
 
 ## Install in Codex
 
@@ -40,7 +40,7 @@ After installation, start a new Codex task so the MCP tool catalog is refreshed.
 | `dsh_ensure_runtime` | Reuse a healthy runtime or safely start local DSH. |
 | `dsh_health` | Check DSH plus bridge policy and optional capabilities. |
 | `dsh_list_workspaces` | List registered workspaces and grouped session ids. |
-| `dsh_create_workspace` | Explicitly register an existing directory as a new workspace/group. |
+| `dsh_create_workspace` | Explicitly register an allowed existing directory when installation-level creation is enabled. |
 | `dsh_set_default_permission` | Explicitly persist the default permission for future tasks. |
 | `dsh_list_agent_presets` | List available and broken agent presets. |
 | `dsh_list_sessions` | List and filter recent sessions. |
@@ -82,8 +82,10 @@ start over.
   automatically only when one candidate clearly matches both workspace and objective; ambiguous
   candidates require one short user question. Recency alone is never sufficient.
 - Creating a workspace/group is allowed only through the separate `dsh_create_workspace` tool after
-  the user explicitly requests it. The required `user_confirmed=true` flag must never be inferred;
-  the tool registers an existing absolute directory and never creates or deletes filesystem content.
+  the user explicitly requests it. The required `user_confirmed=true` flag must never be inferred.
+  Operators must also opt in with `DSH_ENABLE_WORKSPACE_CREATION=true` and configure non-empty
+  allowed roots; the tool registers an existing canonical local directory below one of those roots
+  and never creates or deletes filesystem content.
 - Writable permissions require a registered `workspace_id`. An arbitrary `cwd` is accepted only
   for `read-only`, preventing a model-selected path from enlarging the write sandbox.
 
@@ -102,11 +104,14 @@ conversation**, while `dsh_send` means **continue this exact conversation**.
 | `DSH_RUNTIME_LOG_DIR` | user state directory | DSH stdout/stderr log location, isolated from MCP stdout. |
 | `DSH_RUNTIME_START_TIMEOUT_MS` | `30000` | Health-wait timeout in milliseconds, from 1000 to 120000. |
 | `DSH_MAX_ATTACHMENT_BYTES` | `5242880` | Maximum decoded image size returned to an isolated vision subagent; configurable from 1 to 25 MiB. |
+| `DSH_MAX_PROMPT_CHARS` | `50000` | Maximum JavaScript string length accepted by a new or continued model prompt; configurable from 1000 to 1000000. |
 | `DSH_DEFAULT_PERMISSION` | `read-only` | Initial default used until the user persistently changes it. |
-| `DSH_MAX_PERMISSION` | `danger-full-access` | Hard ceiling that tool arguments cannot exceed. Lower it to `workspace-write` or `read-only` when desired. |
+| `DSH_MAX_PERMISSION` | `danger-full-access` | Bridge-enforced request ceiling. Lower it to `workspace-write` or `read-only` when desired. |
 | `DSH_SETTINGS_FILE` | `~/.deepseek-harness-bridge/settings.json` | Optional absolute path for persistent bridge settings. |
 | `DSH_DEFAULT_WORKSPACE_ID` | unset | Registered workspace used when a new task omits its target. |
 | `DSH_DEFAULT_CWD` | unset | Read-only fallback directory; mutually exclusive with the default workspace id. |
+| `DSH_ENABLE_WORKSPACE_CREATION` | `false` | Enable the user-confirmed workspace registration tool; requires non-empty allowed roots. |
+| `DSH_ALLOWED_WORKSPACE_ROOTS_JSON` | `[]` | JSON array of existing absolute local directories beneath which workspaces may be registered. |
 | `DSH_ENABLE_APPROVAL_RESPONSES` | `false` | Expose working approval responses through MCP instead of Web-UI-only handling. |
 | `DSH_ENABLE_QUESTION_RESPONSES` | `false` | Permit exact question answers/cancellation through MCP instead of Web UI. |
 | `DSH_MAX_CONCURRENT_WAITS` | `4` | Bound long-lived event streams. |
@@ -124,6 +129,11 @@ different default for future tasks. The required confirmation must not be inferr
 ceiling nor default change upgrades an existing session. A persisted default overrides the initial
 environment value but is always capped by `DSH_MAX_PERMISSION`.
 
+The ceiling is enforced at the bridge request boundary, not as an atomic lock over DSH session
+state. Another local DSH Web or API client can change the same session's permission concurrently
+or immediately after the bridge check. Do not treat the bridge as isolation from other trusted
+local clients; control those clients when a session needs a stable permission policy.
+
 Every `dsh_start_task` may override `permission`; the bridge creates the session, executes DSH's
 host-side `/permission <preset>` command, and only then submits the model task. The DSH presets mean:
 
@@ -136,13 +146,14 @@ When `dsh_wait` sees an approval or question, it returns the exact request ident
 observation time, and `mayBeStale=true`. The DSH Web UI remains the safe default. Optional MCP
 responses accept only an exact pending identity; an already-resolved request is returned
 idempotently as `already_resolved`. Approval supports only `allow_once` or `reject`. No persistent
-or automatic response mode exists.
+or automatic response mode exists. Treat both MCP response channels as advanced, experimental
+operator controls; they are disabled by default and are not an out-of-band human-consent system.
 
 `dsh_history` returns `firstSeq` and `nextBeforeSeq`; use the latter as the next exclusive
 `before_seq` cursor. Tool arguments and output are excluded by default and strictly truncated when
 `include_tools=true` to limit sensitive output and token usage.
 
-### Isolated visual relay
+### Experimental isolated visual relay
 
 DSH currently has no dependable vision path, so history and wait results expose only bounded image
 metadata to the main Codex conversation. The bundled skill requires a fresh Codex collaboration
@@ -151,7 +162,7 @@ compact structured text. The parent never receives the image or Base64 and may r
 to the exact DSH session. PNG, JPEG, WebP, and GIF are accepted; the bridge verifies the session
 reference, media metadata, Base64 length, and configured size limit.
 
-This isolation is an explicit skill contract rather than cryptographic caller authentication: the
+This experimental isolation is an explicit skill contract rather than cryptographic caller authentication: the
 public plugin format cannot register a custom subagent type, so it uses Codex's generic collaboration
 subagent. If subagents are unavailable, the skill fails closed unless the user explicitly permits
 the parent conversation to fetch the image.
@@ -173,11 +184,13 @@ npm run check
 npm test
 npm run test:live
 npm run test:mcp-live
+npm run package:smoke
 ```
 
 Neither live probe submits a prompt. `test:live` is read-only; `test:mcp-live` idempotently ensures
 the runtime before exercising the complete Codex stdio MCP path, so it may start local DSH when the
-configured port is vacant.
+configured port is vacant. `package:smoke` packs and installs the exact publishable artifact, runs
+its packaged verification commands, and probes MCP initialization plus tool discovery.
 
 ## Compatibility note
 
@@ -195,6 +208,12 @@ Privileged authoring/admin surfaces are deliberately not exposed just to increas
 model selection may also change DSH's saved default, workspace deletion only unregisters metadata,
 and arbitrary local-path image upload would let the bridge read outside the DSH permission sandbox.
 Those features require separate safety designs before they can become public MCP tools.
+
+## Project status and trademarks
+
+This is an independent community integration. It is not affiliated with, sponsored by, or endorsed
+by DeepSeek or OpenAI. DeepSeek, Codex, OpenAI, and related names identify the systems with which
+the project interoperates; their trademarks remain the property of their respective owners.
 
 ## License
 

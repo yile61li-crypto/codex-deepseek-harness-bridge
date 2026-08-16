@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -11,6 +11,11 @@ import { it } from 'node:test'
 it('implements MCP initialize and tools/list over stdio', async t => {
   const settingsDirectory = await mkdtemp(join(tmpdir(), 'dsh-bridge-settings-'))
   t.after(() => rm(settingsDirectory, { recursive: true, force: true }))
+  const allowedRoot = join(settingsDirectory, 'allowed')
+  const newWorkspace = join(allowedRoot, 'new-work')
+  const outsideWorkspace = join(settingsDirectory, 'outside')
+  await mkdir(newWorkspace, { recursive: true })
+  await mkdir(outsideWorkspace)
   const dshRequests = []
   const dsh = createServer(async (request, response) => {
     let body = ''
@@ -20,13 +25,16 @@ it('implements MCP initialize and tools/list over stdio', async t => {
     let value
     if (message.method === 'session.list') {
       value = { items: [
-        { sessionId: 's-high', running: false, blank: false, projections: { asOfSeq: 4, values: { permissions: { currentValue: 'danger-full-access' } } } },
-        { sessionId: 's-read', running: false, blank: false, projections: { asOfSeq: 9, values: { permissions: { currentValue: 'read-only' } } } },
-      ] }
+         { sessionId: 's-high', running: false, blank: false, projections: { asOfSeq: 4, values: { permissions: { currentValue: 'danger-full-access' } } } },
+         { sessionId: 's-read', running: false, blank: false, projections: { asOfSeq: 9, values: { permissions: { currentValue: 'read-only' } } } },
+         { sessionId: 'new-session', running: false, blank: false, projections: { asOfSeq: 0, values: { permissions: { currentValue: 'read-only' } } } },
+       ] }
     } else if (message.method === 'workspace.list') {
       value = { items: [{ workspaceId: 'w1', path: '/work', title: 'Project', sessionIds: ['s-read', 's'] }], archivedSessionIds: [] }
     } else if (message.method === 'workspace.create') {
       value = { created: true, workspace: { workspaceId: 'w2', path: '/new-work', title: 'new-work', sessionIds: [] } }
+    } else if (message.method === 'session.create') {
+      value = { sessionId: 'new-session' }
     } else if (message.method === 'commands/execute') {
       value = { commandId: 'c-permission', result: { kind: 'success', sourceEventSeq: 10 } }
     } else if (message.method === 'session.attachment') {
@@ -49,6 +57,9 @@ it('implements MCP initialize and tools/list over stdio', async t => {
       ...process.env,
       DSH_WEB_URL: `http://127.0.0.1:${dsh.address().port}`,
       DSH_SETTINGS_FILE: join(settingsDirectory, 'settings.json'),
+      DSH_ENABLE_WORKSPACE_CREATION: 'true',
+      DSH_ALLOWED_WORKSPACE_ROOTS_JSON: JSON.stringify([allowedRoot]),
+      DSH_MAX_PROMPT_CHARS: '1000',
     },
   })
   const lines = createInterface({ input: child.stdout })
@@ -92,10 +103,10 @@ it('implements MCP initialize and tools/list over stdio', async t => {
     name: 'dsh_health', arguments: {},
   } })}\n`)
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 14, method: 'tools/call', params: {
-    name: 'dsh_create_workspace', arguments: { path: '/new-work', user_confirmed: false },
+    name: 'dsh_create_workspace', arguments: { path: newWorkspace, user_confirmed: false },
   } })}\n`)
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 15, method: 'tools/call', params: {
-    name: 'dsh_create_workspace', arguments: { path: '/new-work', user_confirmed: true },
+    name: 'dsh_create_workspace', arguments: { path: newWorkspace, user_confirmed: true },
   } })}\n`)
 
   const deadline = Date.now() + 5_000
@@ -109,8 +120,23 @@ it('implements MCP initialize and tools/list over stdio', async t => {
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 18, method: 'tools/call', params: {
     name: 'dsh_get_attachment', arguments: { session_id: 's-read', attachment_id: 'att-1' },
   } })}\n`)
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 19, method: 'tools/call', params: {
+    name: 'dsh_create_workspace', arguments: { path: outsideWorkspace, user_confirmed: true },
+  } })}\n`)
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 20, method: 'tools/call', params: {
+    name: 'dsh_start_task', arguments: { task: 'new task', workspace_id: 'w1', session_id: 'existing-session' },
+  } })}\n`)
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 21, method: 'tools/call', params: {
+    name: 'dsh_start_task', arguments: { task: 'x'.repeat(1001), workspace_id: 'w1' },
+  } })}\n`)
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 22, method: 'tools/call', params: {
+    name: 'dsh_start_task', arguments: { task: 'start a separate conversation', workspace_id: 'w1', permission: 'read-only' },
+  } })}\n`)
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 23, method: 'tools/call', params: {
+    name: 'dsh_create_workspace', arguments: { path: '\\\\attacker\\share\\folder', user_confirmed: true },
+  } })}\n`)
   const settingsDeadline = Date.now() + 5_000
-  while (replies.length < 18 && Date.now() < settingsDeadline) await new Promise(resolve => setTimeout(resolve, 10))
+  while (replies.length < 23 && Date.now() < settingsDeadline) await new Promise(resolve => setTimeout(resolve, 10))
   child.kill()
   await once(child, 'exit')
   await new Promise(resolve => dsh.close(resolve))
@@ -128,6 +154,13 @@ it('implements MCP initialize and tools/list over stdio', async t => {
   const startTool = byId[2].result.tools.find(tool => tool.name === 'dsh_start_task')
   assert.equal(startTool.annotations.destructiveHint, true)
   assert.equal(startTool.annotations.openWorldHint, true)
+  assert.equal(startTool.inputSchema.properties.session_id, undefined)
+  assert.equal(startTool.inputSchema.properties.task.maxLength, 1000)
+  const sendTool = byId[2].result.tools.find(tool => tool.name === 'dsh_send')
+  assert.equal(sendTool.inputSchema.properties.message.maxLength, 1000)
+  const createWorkspaceTool = byId[2].result.tools.find(tool => tool.name === 'dsh_create_workspace')
+  assert.equal(createWorkspaceTool.annotations.destructiveHint, true)
+  assert.equal(createWorkspaceTool.annotations.openWorldHint, true)
   assert.equal(byId[3].result.isError, true)
   assert.equal(byId[3].result.structuredContent.error, 'approval-responses-disabled')
   assert.equal(byId[4].result.structuredContent.permission, 'danger-full-access')
@@ -147,6 +180,8 @@ it('implements MCP initialize and tools/list over stdio', async t => {
   assert.equal(byId[13].result.structuredContent.bridgePolicy.maxPermission, 'danger-full-access')
   assert.equal(byId[13].result.structuredContent.bridgePolicy.conversationRouting, 'reuse-related-exact-session')
   assert.equal(byId[13].result.structuredContent.bridgePolicy.implicitGlobalLastSession, false)
+  assert.equal(byId[13].result.structuredContent.bridgePolicy.maxPromptChars, 1000)
+  assert.equal(byId[13].result.structuredContent.bridgePolicy.workspaceCreationEnabled, true)
   assert.equal(byId[14].result.structuredContent.error, 'invalid-argument')
   assert.equal(byId[15].result.structuredContent.created, true)
   assert.equal(byId[15].result.structuredContent.workspace.workspaceId, 'w2')
@@ -160,10 +195,50 @@ it('implements MCP initialize and tools/list over stdio', async t => {
   assert.equal(byId[18].result.content[1].type, 'image')
   assert.equal(byId[18].result.content[1].mimeType, 'image/png')
   assert.equal(byId[18].result.content[1].data, 'AQIDBA==')
+  assert.equal(byId[19].result.structuredContent.error, 'workspace-target-not-allowed')
+  assert.equal(byId[20].result.structuredContent.error, 'invalid-argument')
+  assert.equal(byId[21].result.structuredContent.error, 'invalid-argument')
+  assert.equal(byId[22].result.structuredContent.sessionId, 'new-session')
+  assert.equal(byId[22].result.structuredContent.continueWith.sessionId, 'new-session')
+  assert.equal(byId[23].result.structuredContent.error, 'invalid-workspace-target')
   const permissionCommand = dshRequests.find(request => request.method === 'commands/execute')
   assert.equal(permissionCommand.payload.args.line, '/permission danger-full-access')
   assert.equal(dshRequests.filter(request => request.method === 'workspace.create').length, 1)
-  const submitted = dshRequests.find(request => request.method === 'session.prompt')
+  assert.equal(dshRequests.find(request => request.method === 'workspace.create').payload.path, await realpath(newWorkspace))
+  const createSessionRequest = dshRequests.find(request => request.method === 'session.create')
+  assert.equal(createSessionRequest.payload.sessionId, undefined)
+  const submitted = dshRequests.find(request => request.method === 'session.prompt' && request.payload.sessionId === 's-read')
   assert.equal(submitted.payload.sessionId, 's-read')
   assert.equal(submitted.payload.content[0].text, 'continue exactly this session')
+  const newTask = dshRequests.find(request => request.method === 'session.prompt' && request.payload.sessionId === 'new-session')
+  assert.equal(newTask.payload.content[0].text, 'start a separate conversation')
+})
+
+it('keeps workspace creation disabled unless the operator explicitly enables it', async t => {
+  const settingsDirectory = await mkdtemp(join(tmpdir(), 'dsh-bridge-disabled-'))
+  const workspace = join(settingsDirectory, 'workspace')
+  await mkdir(workspace)
+  t.after(() => rm(settingsDirectory, { recursive: true, force: true }))
+
+  const child = spawn(process.execPath, ['scripts/server.mjs'], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      DSH_WEB_URL: 'http://127.0.0.1:9',
+      DSH_SETTINGS_FILE: join(settingsDirectory, 'settings.json'),
+      DSH_ENABLE_WORKSPACE_CREATION: 'false',
+      DSH_ALLOWED_WORKSPACE_ROOTS_JSON: '[]',
+    },
+  })
+  const lines = createInterface({ input: child.stdout })
+  const replyPromise = once(lines, 'line')
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {
+    name: 'dsh_create_workspace', arguments: { path: workspace, user_confirmed: true },
+  } })}\n`)
+  const [line] = await replyPromise
+  child.kill()
+  await once(child, 'exit')
+  const reply = JSON.parse(line)
+  assert.equal(reply.result.isError, true)
+  assert.equal(reply.result.structuredContent.error, 'workspace-creation-disabled')
 })

@@ -1,5 +1,5 @@
 import { spawn as nodeSpawn } from 'node:child_process'
-import { open, mkdir } from 'node:fs/promises'
+import { chmod, open, mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -133,8 +133,16 @@ export async function resolveRuntimeLaunch({
 }
 
 async function defaultPrepareLog(logPath) {
-  await mkdir(dirname(logPath), { recursive: true })
-  const handle = await open(logPath, 'a')
+  const logDirectory = dirname(logPath)
+  await mkdir(logDirectory, { recursive: true, mode: 0o700 })
+  if (process.platform !== 'win32') await chmod(logDirectory, 0o700)
+  const handle = await open(logPath, 'a', 0o600)
+  try {
+    if (process.platform !== 'win32') await handle.chmod(0o600)
+  } catch (error) {
+    await handle.close().catch(() => {})
+    throw error
+  }
   return { fd: handle.fd, close: () => handle.close() }
 }
 

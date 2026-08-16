@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { resolve } from 'node:path'
+import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { describe, it } from 'node:test'
 
 import {
@@ -185,5 +187,41 @@ describe('DshRuntimeManager', () => {
     })
     await assert.rejects(manager.ensure(), error => error.code === 'runtime-start-timeout')
     assert.equal(child.kills, 1)
+  })
+
+  it('keeps runtime logs private and repairs existing POSIX modes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-runtime-log-'))
+    const logDirectory = join(root, 'logs')
+    const logPath = join(logDirectory, 'runtime.log')
+    try {
+      await mkdir(logDirectory, { mode: 0o755 })
+      await writeFile(logPath, 'existing\n', { mode: 0o644 })
+      if (process.platform !== 'win32') {
+        await chmod(logDirectory, 0o755)
+        await chmod(logPath, 0o644)
+      }
+      const probes = [false, true]
+      const manager = new DshRuntimeManager({
+        env: { DSH_RUNTIME_COMMAND: 'custom-dsh' },
+        probe: async () => probes.shift() ?? true,
+        spawn: () => childProcess(100),
+        prepareCwd: async () => {},
+        logPath,
+        startupTimeoutMs: 500,
+        pollIntervalMs: 1,
+      })
+      await manager.ensure()
+
+      const directoryStat = await stat(logDirectory)
+      const fileStat = await stat(logPath)
+      assert.equal(directoryStat.isDirectory(), true)
+      assert.equal(fileStat.isFile(), true)
+      if (process.platform !== 'win32') {
+        assert.equal(directoryStat.mode & 0o777, 0o700)
+        assert.equal(fileStat.mode & 0o777, 0o600)
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })

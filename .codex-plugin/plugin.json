@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-bridge",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Start, open, and control DeepSeek Harness from Codex through MCP.",
   "author": {
     "name": "DeepSeek Harness Bridge contributors"
@@ -26,7 +26,7 @@
       "Managed local runtime",
       "Codex browser handoff",
       "Session streaming",
-      "Vision subagent relay",
+      "Experimental vision subagent relay",
       "Workspace routing",
       "Permission controls",
       "Approval and question handoff"

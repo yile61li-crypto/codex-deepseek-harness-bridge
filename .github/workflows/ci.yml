@@ -15,7 +15,7 @@ concurrency:
 jobs:
   verify:
     name: Node 22 / ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -29,7 +29,13 @@ jobs:
           cache: npm
       - name: Install the pinned DSH runtime dependency
         run: npm ci --ignore-scripts
+      - name: Audit production dependencies against the official registry
+        run: npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
       - name: Verify source, tests, and plugin manifests
         run: npm run verify
+      - name: Exercise the managed runtime MCP path without a model prompt
+        run: npm run test:mcp-live
       - name: Inspect the publishable package
         run: npm run pack:dry-run
+      - name: Install and probe the packed artifact
+        run: npm run package:smoke
