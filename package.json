@@ -1,0 +1,28 @@
+{
+  "name": "codex-deepseek-harness-bridge",
+  "version": "0.1.0",
+  "description": "A dependency-free MCP bridge from Codex to the DeepSeek Harness Web runtime.",
+  "type": "module",
+  "license": "MIT",
+  "private": false,
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "bin": {
+    "codex-deepseek-harness-bridge": "scripts/server.mjs"
+  },
+  "files": [
+    ".codex-plugin",
+    ".mcp.json",
+    "scripts",
+    "src",
+    "LICENSE",
+    "README.md",
+    "README.zh-CN.md"
+  ],
+  "scripts": {
+    "check": "node --check scripts/server.mjs && node --check src/dsh-client.mjs",
+    "test": "node --test",
+    "test:live": "node scripts/live-probe.mjs"
+  }
+}
