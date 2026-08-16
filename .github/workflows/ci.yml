@@ -26,6 +26,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22.19.0'
+          cache: npm
+      - name: Install the pinned DSH runtime dependency
+        run: npm ci --ignore-scripts
       - name: Verify source, tests, and plugin manifests
         run: npm run verify
       - name: Inspect the publishable package

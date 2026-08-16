@@ -1,19 +1,29 @@
 # Codex DeepSeek Harness Bridge
 
-这是一个本地 MCP 桥，让 Codex 把任务交给已经运行的
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web 进程。Codex 和网页使用同一个
+这是一个本地 MCP 桥，让 Codex 启动或复用
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web 进程，并用 Codex 内置浏览器在右侧打开它。Codex 和网页使用同一个
 DSH 进程与会话存储，因此新会话、思考过程、工具调用和最终结果都能继续在 DSH Web UI 中看到。
 
 ## 环境要求
 
 - Node.js 22.19 或更高版本。
-- DeepSeek Harness Web 正在 `http://127.0.0.1:3080` 运行。
-- DSH Web 的 `session.*` RPC 与事件流和本插件兼容。目前针对 DSH `0.1.0-rc.5` 验证。
+- 可使用插件锁定的 `@deepseek-ai/dsh` 依赖；若目标地址已有 DSH，插件会直接复用。
+- DSH Web 的 `session.*` RPC 与事件流和本插件兼容。目前针对 DSH `0.1.0-rc.5` 和 `0.1.0-rc.6` 验证。
 
 ## Codex 安装
 
 将本仓库作为 Codex 插件安装，或者把它加入兼容的 Agent Plugins marketplace。仓库内的
-`.mcp.json` 会用 Node 启动无运行时依赖的 MCP Server，并且只允许连接本机回环地址。
+`.mcp.json` 会用 Node 启动 MCP Server，并且只允许连接本机回环地址。安装依赖后，用户只需说“打开
+DeepSeek Harness”：插件先执行 `dsh_ensure_runtime`，健康后再调用 Codex 自带的 Browser 在右侧打开页面。
+
+从源码安装时先在插件目录执行一次：
+
+```sh
+npm ci --ignore-scripts
+```
+
+这会按 `package-lock.json` 安装锁定的官方 DSH 运行时；如果只连接用户已启动的 DSH，则 MCP 读取工具
+本身没有第三方运行时依赖。
 
 安装后新建一个 Codex 任务，让 Codex 重新加载 MCP 工具目录。
 
@@ -21,6 +31,8 @@ DSH 进程与会话存储，因此新会话、思考过程、工具调用和最�
 
 | 工具 | 用途 |
 |---|---|
+| `dsh_runtime_status` | 检查本机 DSH 是否已运行及启动配置。 |
+| `dsh_ensure_runtime` | 复用健康运行时；不存在时安全启动本地 DSH。 |
 | `dsh_health` | 检查 DSH、桥安全策略与可选能力。 |
 | `dsh_list_workspaces` | 列出已注册工作区及其会话。 |
 | `dsh_list_agent_presets` | 列出可用和损坏的 Agent Preset。 |
@@ -59,6 +71,11 @@ DSH 进程与会话存储，因此新会话、思考过程、工具调用和最�
 | 环境变量 | 默认值 | 含义 |
 |---|---|---|
 | `DSH_WEB_URL` | `http://127.0.0.1:3080` | 已运行的 DSH Web；只接受本机回环 HTTP。 |
+| `DSH_RUNTIME_COMMAND` | 未设置 | 可选的 DSH 可执行文件；未设置时使用本包锁定的官方 `@deepseek-ai/dsh`。 |
+| `DSH_RUNTIME_ARGS_JSON` | 未设置 | 传给自定义可执行文件、位于固定 `web --host/--port` 参数之前的 JSON 字符串数组。 |
+| `DSH_RUNTIME_CWD` | 专用状态目录 | 自定义运行时工作目录；默认不使用插件源码目录，也不影响任务自身选择的工作区。 |
+| `DSH_RUNTIME_LOG_DIR` | 用户状态目录 | DSH stdout/stderr 日志目录；不会写入 MCP stdout。 |
+| `DSH_RUNTIME_START_TIMEOUT_MS` | `30000` | 等待 DSH 健康的毫秒数，范围 1000–120000。 |
 | `DSH_DEFAULT_PERMISSION` | `read-only` | 每个新任务的默认权限。 |
 | `DSH_MAX_PERMISSION` | `workspace-write` | 工具参数无法越过的权限硬上限；设为 `read-only` 即锁死只读。 |
 | `DSH_DEFAULT_WORKSPACE_ID` | 未设置 | 新任务没指定目标时使用的已注册工作区。 |
@@ -94,6 +111,11 @@ DSH 网页处理。可选 MCP 回复只接受精确的待处理身份；如果�
 可以用 `DSH_WEB_URL` 更换本机端口，但插件会拒绝局域网和公网地址、HTTPS、URL 凭据、路径、查询参数
 及 fragment，因为当前 DSH Web API 依赖本机信任边界，并不是带用户认证的远程 API。
 
+`dsh_ensure_runtime` 是幂等的：目标端口已有健康 DSH 时不创建新进程，也从不终止外部进程。新进程通过
+Node 直接执行官方 `lib/bin.js`，固定 `shell=false`、回环地址和配置端口；日志与 MCP JSON-RPC 标准输出
+隔离。MCP 不能直接控制 Codex 窗口，所以插件技能在健康检查后调用 Codex 宿主的内置 Browser，这不是
+`.app.json` WebView，也不会跳到系统浏览器。
+
 ## 开发与验证
 
 ```sh
@@ -103,8 +125,8 @@ npm run test:live
 npm run test:mcp-live
 ```
 
-两个 live probe 都只读且不发送提示词：`test:live` 验证 DSH 客户端，`test:mcp-live` 验证完整的
-Codex stdio MCP 链路。
+两个 live probe 都不发送提示词：`test:live` 只读验证 DSH 客户端；`test:mcp-live` 先幂等确保运行时，
+再验证完整的 Codex stdio MCP 链路，因此目标端口为空时可能启动本地 DSH。
 
 ## 兼容性说明
 

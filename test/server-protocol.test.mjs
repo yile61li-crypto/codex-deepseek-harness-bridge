@@ -64,18 +64,25 @@ it('implements MCP initialize and tools/list over stdio', async () => {
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 10, method: 'tools/call', params: {
     name: 'dsh_send', arguments: { session_id: 's-read', message: 'continue exactly this session' },
   } })}\n`)
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 11, method: 'tools/call', params: {
+    name: 'dsh_runtime_status', arguments: {},
+  } })}\n`)
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 12, method: 'tools/call', params: {
+    name: 'dsh_ensure_runtime', arguments: {},
+  } })}\n`)
 
   const deadline = Date.now() + 5_000
-  while (replies.length < 10 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
+  while (replies.length < 12 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
   child.kill()
   await once(child, 'exit')
   await new Promise(resolve => dsh.close(resolve))
 
   const byId = Object.fromEntries(replies.map(reply => [reply.id, reply]))
   assert.equal(byId[1].result.protocolVersion, '2025-06-18')
-  assert.equal(byId[2].result.tools.length, 17)
+  assert.equal(byId[2].result.tools.length, 19)
   assert.deepEqual(byId[2].result.tools.map(tool => tool.name), [
-    'dsh_health', 'dsh_list_workspaces', 'dsh_list_agent_presets', 'dsh_list_sessions', 'dsh_get_session',
+    'dsh_runtime_status', 'dsh_ensure_runtime', 'dsh_health',
+    'dsh_list_workspaces', 'dsh_list_agent_presets', 'dsh_list_sessions', 'dsh_get_session',
     'dsh_search_sessions', 'dsh_get_models', 'dsh_start_task', 'dsh_rename_session', 'dsh_fork_session',
     'dsh_set_permission', 'dsh_send', 'dsh_wait', 'dsh_answer_approval', 'dsh_answer_question',
     'dsh_history', 'dsh_cancel',
@@ -95,6 +102,10 @@ it('implements MCP initialize and tools/list over stdio', async () => {
   assert.equal(byId[10].result.structuredContent.sessionId, 's-read')
   assert.equal(byId[10].result.structuredContent.waitAfterSeq, 9)
   assert.equal(typeof byId[10].result.structuredContent.promptRpcId, 'string')
+  assert.equal(byId[11].result.structuredContent.reachable, true)
+  assert.equal(byId[11].result.structuredContent.startMode, 'existing')
+  assert.equal(byId[12].result.structuredContent.reachable, true)
+  assert.equal(byId[12].result.structuredContent.startMode, 'existing')
   const submitted = dshRequests.find(request => request.method === 'session.prompt')
   assert.equal(submitted.payload.sessionId, 's-read')
   assert.equal(submitted.payload.content[0].text, 'continue exactly this session')

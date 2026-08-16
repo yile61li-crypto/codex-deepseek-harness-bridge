@@ -9,6 +9,11 @@
       "cwd": "${PLUGIN_ROOT}",
       "env": {
         "DSH_WEB_URL": "http://127.0.0.1:3080",
+        "DSH_RUNTIME_COMMAND": "",
+        "DSH_RUNTIME_ARGS_JSON": "",
+        "DSH_RUNTIME_CWD": "",
+        "DSH_RUNTIME_LOG_DIR": "",
+        "DSH_RUNTIME_START_TIMEOUT_MS": "30000",
         "DSH_DEFAULT_PERMISSION": "read-only",
         "DSH_MAX_PERMISSION": "workspace-write",
         "DSH_DEFAULT_CWD": "",

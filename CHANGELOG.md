@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-16
+
+### Added
+
+- Managed DSH runtime discovery and idempotent local startup through the pinned official CLI dependency.
+- A plugin skill that opens the verified loopback DSH URL in Codex's built-in browser side panel.
+- Operator overrides for the runtime executable, argument prefix, working directory, log directory, and startup timeout.
+
+### Changed
+
+- The bridge now works when DSH is not already running; an existing runtime is always reused and never terminated.
+
 ## [0.3.0] - 2026-08-16
 
 ### Added

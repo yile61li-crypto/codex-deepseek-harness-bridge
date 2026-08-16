@@ -1,7 +1,7 @@
 # DeepSeek Harness Bridge for Codex
 
-A local MCP bridge that lets Codex delegate work to an already running
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web runtime. Both clients use
+A local MCP bridge that lets Codex start or reuse a
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web runtime and open it in Codex's built-in browser. Both clients use
 the same DSH process and session store, so delegated sessions and live tool activity remain visible
 in the DSH Web UI.
 
@@ -10,15 +10,25 @@ in the DSH Web UI.
 ## Requirements
 
 - Node.js 22.19 or newer.
-- DeepSeek Harness Web running on `http://127.0.0.1:3080`.
+- The pinned `@deepseek-ai/dsh` dependency, or an already running compatible DSH Web runtime.
 - A DSH version compatible with the developer-preview `session.*` Web RPC and event streams. The
-  bridge is currently tested against DSH `0.1.0-rc.5`.
+  bridge is currently tested against DSH `0.1.0-rc.5` and `0.1.0-rc.6`.
 
 ## Install in Codex
 
 Install this repository as a Codex plugin or add it to a compatible Agent Plugins marketplace.
-The included `.mcp.json` starts the dependency-free MCP server with Node and connects only to the
-loopback DSH URL.
+The included `.mcp.json` starts the MCP server with Node and connects only to the loopback DSH URL.
+After dependencies are installed, ask Codex to “open DeepSeek Harness”: the plugin ensures the
+runtime first and then opens the verified URL in Codex's own right-side Browser panel.
+
+For a source checkout, install the pinned official runtime once from the plugin directory:
+
+```sh
+npm ci --ignore-scripts
+```
+
+The bridge can still connect to an externally started DSH without this dependency; managed startup
+requires it unless `DSH_RUNTIME_COMMAND` is configured.
 
 After installation, start a new Codex task so the MCP tool catalog is refreshed.
 
@@ -26,6 +36,8 @@ After installation, start a new Codex task so the MCP tool catalog is refreshed.
 
 | Tool | Purpose |
 |---|---|
+| `dsh_runtime_status` | Inspect local DSH reachability and managed-start configuration. |
+| `dsh_ensure_runtime` | Reuse a healthy runtime or safely start local DSH. |
 | `dsh_health` | Check DSH plus bridge policy and optional capabilities. |
 | `dsh_list_workspaces` | List registered workspaces and grouped session ids. |
 | `dsh_list_agent_presets` | List available and broken agent presets. |
@@ -70,6 +82,11 @@ conversation**.
 | Environment variable | Default | Meaning |
 |---|---|---|
 | `DSH_WEB_URL` | `http://127.0.0.1:3080` | Existing DSH Web runtime. Only loopback HTTP URLs are accepted. |
+| `DSH_RUNTIME_COMMAND` | unset | Optional DSH executable; otherwise the pinned official `@deepseek-ai/dsh` dependency is used. |
+| `DSH_RUNTIME_ARGS_JSON` | unset | JSON string array prepended before the fixed `web --host/--port` arguments for a custom executable. |
+| `DSH_RUNTIME_CWD` | dedicated state directory | Optional managed-runtime working directory; never defaults to plugin source and remains independent of task workspace selection. |
+| `DSH_RUNTIME_LOG_DIR` | user state directory | DSH stdout/stderr log location, isolated from MCP stdout. |
+| `DSH_RUNTIME_START_TIMEOUT_MS` | `30000` | Health-wait timeout in milliseconds, from 1000 to 120000. |
 | `DSH_DEFAULT_PERMISSION` | `read-only` | Permission applied before every new task. |
 | `DSH_MAX_PERMISSION` | `workspace-write` | Hard ceiling that tool arguments cannot exceed. Set `read-only` for an absolute read-only bridge. |
 | `DSH_DEFAULT_WORKSPACE_ID` | unset | Registered workspace used when a new task omits its target. |
@@ -109,6 +126,13 @@ or automatic response mode exists.
 A different loopback port can be configured with `DSH_WEB_URL`. Remote hosts, HTTPS URLs,
 credentials, paths, queries, and fragments are rejected deliberately.
 
+`dsh_ensure_runtime` is idempotent: a healthy DSH on the target port is reused, never restarted or
+terminated. A managed runtime is launched by Node directly through the official `lib/bin.js` with
+`shell=false`, a fixed loopback host, and the configured port. Its logs never share the MCP JSON-RPC
+stdout. MCP cannot manipulate Codex windows by itself, so the bundled skill performs the final host
+handoff to Codex's built-in Browser; it does not open the system browser or invent an `.app.json`
+webview capability.
+
 ## Development
 
 ```sh
@@ -118,8 +142,9 @@ npm run test:live
 npm run test:mcp-live
 ```
 
-Both live probes are read-only and never submit a prompt. `test:live` exercises the DSH client;
-`test:mcp-live` exercises the complete Codex stdio MCP path.
+Neither live probe submits a prompt. `test:live` is read-only; `test:mcp-live` idempotently ensures
+the runtime before exercising the complete Codex stdio MCP path, so it may start local DSH when the
+configured port is vacant.
 
 ## Compatibility note
 

@@ -1,6 +1,6 @@
 {
   "name": "codex-deepseek-harness-bridge",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A local-first MCP bridge that lets Codex operate visible DeepSeek Harness sessions.",
   "type": "module",
   "license": "MIT",
@@ -19,6 +19,9 @@
   "engines": {
     "node": ">=22.19.0"
   },
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.1.0-rc.6"
+  },
   "packageManager": "npm@10.9.8",
   "bin": {
     "codex-deepseek-harness-bridge": "scripts/server.mjs"
@@ -26,6 +29,7 @@
   "files": [
     ".codex-plugin",
     ".mcp.json",
+    "skills",
     "scripts",
     "src",
     "LICENSE",

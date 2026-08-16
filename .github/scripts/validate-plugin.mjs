@@ -124,6 +124,11 @@ if (isObject(manifest)) {
   if (manifest.mcpServers !== './.mcp.json') {
     errors.push('plugin.json.mcpServers must be ./.mcp.json');
   }
+  if (manifest.skills !== './skills/') {
+    errors.push('plugin.json.skills must be ./skills/');
+  } else {
+    await requireFile(manifest.skills, 'plugin.json.skills');
+  }
   if (!isObject(manifest.author)) {
     errors.push('plugin.json.author must be an object');
   } else {
@@ -208,7 +213,7 @@ if (isObject(packageJson)) {
       ([name, file]) => requireFile(file, `package.json.bin.${name}`)
     ));
   }
-  const requiredFiles = ['.codex-plugin', '.mcp.json', 'scripts', 'src', 'SECURITY.md'];
+  const requiredFiles = ['.codex-plugin', '.mcp.json', 'skills', 'scripts', 'src', 'SECURITY.md'];
   if (!Array.isArray(packageJson.files)) {
     errors.push('package.json.files must be an array');
   } else {

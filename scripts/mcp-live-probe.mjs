@@ -7,6 +7,7 @@ const child = spawn(process.execPath, ['scripts/server.mjs'], { stdio: ['pipe', 
 const pending = new Map()
 let nextId = 1
 let stderr = ''
+const requestTimeoutMs = Math.max(10_000, Number(process.env.DSH_RUNTIME_START_TIMEOUT_MS ?? 30_000) + 5_000)
 
 child.stderr.on('data', chunk => { stderr += String(chunk) })
 createInterface({ input: child.stdout }).on('line', line => {
@@ -27,7 +28,7 @@ function request(method, params = {}) {
     const timer = setTimeout(() => {
       pending.delete(id)
       reject(new Error(`MCP request timed out: ${method}`))
-    }, 10_000)
+    }, requestTimeoutMs)
     pending.set(id, { resolve, reject, timer })
     child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`)
   })
@@ -44,6 +45,7 @@ try {
     protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'mcp-live-probe', version: '1' },
   })
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`)
+  const runtime = await tool('dsh_ensure_runtime')
   const [health, workspaces, presets, sessions] = await Promise.all([
     tool('dsh_health'), tool('dsh_list_workspaces'), tool('dsh_list_agent_presets'),
     tool('dsh_list_sessions', { limit: 1 }),
@@ -51,6 +53,8 @@ try {
   process.stdout.write(`${JSON.stringify({
     protocolVersion: initialized.protocolVersion,
     serverVersion: initialized.serverInfo?.version,
+    runtimeStartMode: runtime.startMode,
+    runtimeBaseUrl: runtime.baseUrl,
     reachable: health.reachable,
     defaultPermission: health.bridgePolicy?.defaultPermission,
     maxPermission: health.bridgePolicy?.maxPermission,

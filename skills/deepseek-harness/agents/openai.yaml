@@ -1,0 +1,4 @@
+interface:
+  display_name: "DeepSeek Harness"
+  short_description: "Start DSH, open it in Codex, and manage exact sessions"
+  default_prompt: "Open DeepSeek Harness in the Codex side panel."

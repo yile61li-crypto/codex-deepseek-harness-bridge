@@ -3,8 +3,9 @@
 import { createInterface } from 'node:readline'
 import { isAbsolute, parse, resolve } from 'node:path'
 import { DshClient, DshRpcError, parsePermissionPreset } from '../src/dsh-client.mjs'
+import { DshRuntimeError, DshRuntimeManager } from '../src/dsh-runtime.mjs'
 
-const SERVER_INFO = { name: 'deepseek-harness-bridge', version: '0.3.0' }
+const SERVER_INFO = { name: 'deepseek-harness-bridge', version: '0.4.0' }
 const SUPPORTED_PROTOCOLS = new Set(['2024-11-05', '2025-03-26', '2025-06-18'])
 const PERMISSION_RANK = Object.freeze({ 'read-only': 0, 'workspace-write': 1, 'danger-full-access': 2 })
 const controllers = new Map()
@@ -43,12 +44,18 @@ const DEFAULT_CWD = optionalEnv('DSH_DEFAULT_CWD')
 const DEFAULT_WORKSPACE_ID = optionalEnv('DSH_DEFAULT_WORKSPACE_ID')
 const MAX_CONCURRENT_WAITS = integerEnv('DSH_MAX_CONCURRENT_WAITS', 4, 1, 32)
 const MODEL_REQUESTS_PER_MINUTE = integerEnv('DSH_MODEL_REQUESTS_PER_MINUTE', 12, 1, 120)
+const RUNTIME_START_TIMEOUT_MS = integerEnv('DSH_RUNTIME_START_TIMEOUT_MS', 30_000, 1_000, 120_000)
 if (PERMISSION_RANK[DEFAULT_PERMISSION] > PERMISSION_RANK[MAX_PERMISSION]) {
   throw new Error('DSH_DEFAULT_PERMISSION must not exceed DSH_MAX_PERMISSION')
 }
 if (DEFAULT_CWD !== undefined && DEFAULT_WORKSPACE_ID !== undefined) {
   throw new Error('DSH_DEFAULT_CWD and DSH_DEFAULT_WORKSPACE_ID are mutually exclusive')
 }
+const runtime = new DshRuntimeManager({
+  baseUrl: client.baseUrl.origin,
+  env: process.env,
+  startupTimeoutMs: RUNTIME_START_TIMEOUT_MS,
+})
 
 function bridgePolicy() {
   return {
@@ -61,10 +68,23 @@ function bridgePolicy() {
     questionResponsesEnabled: QUESTION_RESPONSES_ENABLED,
     maxConcurrentWaits: MAX_CONCURRENT_WAITS,
     modelRequestsPerMinute: MODEL_REQUESTS_PER_MINUTE,
+    runtimeStartTimeoutMs: RUNTIME_START_TIMEOUT_MS,
   }
 }
 
 const tools = [
+  {
+    name: 'dsh_runtime_status',
+    description: 'Check whether the configured loopback DSH Web runtime is reachable. This never starts, stops, or restarts a process.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'dsh_ensure_runtime',
+    description: 'Idempotently reuse a healthy loopback DSH Web runtime or start the configured local DSH CLI. Returns the exact URL for Codex built-in Browser handoff.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
   {
     name: 'dsh_health',
     description: 'Check the loopback DSH runtime and report the bridge safety policy. host.version is only DSH\'s reported API placeholder, not a reliable product version.',
@@ -453,13 +473,17 @@ function requestKey(id) {
 async function callTool(name, args, signal) {
   validateToolArguments(name, args)
   switch (name) {
+    case 'dsh_runtime_status':
+      return runtime.status({ signal })
+    case 'dsh_ensure_runtime':
+      return runtime.ensure({ signal })
     case 'dsh_health': {
       const health = await client.health({ signal })
       const optional = await Promise.allSettled([client.listWorkspaces({ signal }), client.listAgentPresets({ signal })])
       return {
         ...health,
         reportedHostApiVersion: health.host?.version ?? null,
-        testedDshVersions: ['0.1.0-rc.5'],
+        testedDshVersions: ['0.1.0-rc.5', '0.1.0-rc.6'],
         optionalCapabilities: {
           workspaces: optional[0].status === 'fulfilled', agentPresets: optional[1].status === 'fulfilled',
         },
@@ -666,11 +690,12 @@ function toolResult(value) {
 }
 
 function toolError(error) {
+  const structured = error instanceof DshRpcError || error instanceof DshRuntimeError
   const value = {
-    error: error instanceof DshRpcError ? error.code : 'internal-error',
+    error: structured ? error.code : 'internal-error',
     message: error instanceof Error ? error.message : String(error),
     ...(error instanceof DshRpcError && error.method !== undefined ? { method: error.method } : {}),
-    ...(error instanceof DshRpcError && error.details !== undefined ? { details: error.details } : {}),
+    ...(structured && error.details !== undefined ? { details: error.details } : {}),
   }
   return { ...toolResult(value), isError: true }
 }
