@@ -13,15 +13,27 @@ it('implements MCP initialize and tools/list over stdio', async () => {
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } } })}\n`)
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`)
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })}\n`)
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: {
+    name: 'dsh_answer_approval', arguments: { session_id: 's', rpc_id: 'r', approval_id: 'a', decision: 'allow_once' },
+  } })}\n`)
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: {
+    name: 'dsh_set_permission', arguments: { session_id: 's', permission: 'danger-full-access' },
+  } })}\n`)
 
   const deadline = Date.now() + 5_000
-  while (replies.length < 2 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
+  while (replies.length < 4 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
   child.kill()
   await once(child, 'exit')
 
-  assert.equal(replies[0].result.protocolVersion, '2025-06-18')
-  assert.equal(replies[1].result.tools.length, 7)
-  assert.deepEqual(replies[1].result.tools.map(tool => tool.name), [
-    'dsh_health', 'dsh_list_sessions', 'dsh_start_task', 'dsh_send', 'dsh_wait', 'dsh_history', 'dsh_cancel',
+  const byId = Object.fromEntries(replies.map(reply => [reply.id, reply]))
+  assert.equal(byId[1].result.protocolVersion, '2025-06-18')
+  assert.equal(byId[2].result.tools.length, 9)
+  assert.deepEqual(byId[2].result.tools.map(tool => tool.name), [
+    'dsh_health', 'dsh_list_sessions', 'dsh_start_task', 'dsh_set_permission', 'dsh_send', 'dsh_wait',
+    'dsh_answer_approval', 'dsh_history', 'dsh_cancel',
   ])
+  assert.equal(byId[3].result.isError, true)
+  assert.equal(byId[3].result.structuredContent.error, 'approval-responses-disabled')
+  assert.equal(byId[4].result.isError, true)
+  assert.equal(byId[4].result.structuredContent.error, 'danger-full-access-disabled')
 })

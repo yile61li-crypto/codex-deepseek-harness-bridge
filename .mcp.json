@@ -8,7 +8,10 @@
       ],
       "cwd": "${PLUGIN_ROOT}",
       "env": {
-        "DSH_WEB_URL": "http://127.0.0.1:3080"
+        "DSH_WEB_URL": "http://127.0.0.1:3080",
+        "DSH_DEFAULT_PERMISSION": "workspace-write",
+        "DSH_ALLOW_DANGER_FULL_ACCESS": "false",
+        "DSH_ENABLE_APPROVAL_RESPONSES": "false"
       }
     }
   }

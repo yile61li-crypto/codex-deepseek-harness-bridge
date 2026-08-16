@@ -29,19 +29,50 @@ After installation, start a new Codex task so the MCP tool catalog is refreshed.
 | `dsh_health` | Check the local DSH Web runtime. |
 | `dsh_list_sessions` | List sessions visible in DSH Web. |
 | `dsh_start_task` | Create a visible session and submit a model task. |
+| `dsh_set_permission` | Change one session's DSH permission preset. |
 | `dsh_send` | Queue or steer another message. |
-| `dsh_wait` | Wait for completion or a user-action boundary. |
+| `dsh_wait` | Wait for completion or return structured approval details. |
+| `dsh_answer_approval` | Allow once or reject an exact pending approval when explicitly enabled. |
 | `dsh_history` | Read compact message-level history. |
 | `dsh_cancel` | Cancel the active turn without deleting queued work. |
 
 `dsh_start_task` and `dsh_send` invoke the model configured in DSH and may incur usage. The bridge
-does not auto-approve tool permissions or answer DSH questions; use the Web UI for those actions.
+never auto-approves tool permissions. DSH questions remain Web-UI-only.
 
 ## Configuration
 
-The plugin sets `DSH_WEB_URL=http://127.0.0.1:3080`. A different loopback port can be configured by
-overriding that environment variable. Remote hosts, HTTPS URLs, credentials, paths, queries, and
-fragments are rejected deliberately.
+| Environment variable | Default | Meaning |
+|---|---|---|
+| `DSH_WEB_URL` | `http://127.0.0.1:3080` | Existing DSH Web runtime. Only loopback HTTP URLs are accepted. |
+| `DSH_DEFAULT_PERMISSION` | `workspace-write` | Permission applied before every new task: `read-only`, `workspace-write`, or `danger-full-access`. |
+| `DSH_ALLOW_DANGER_FULL_ACCESS` | `false` | Operator opt-in required before any MCP tool may select `danger-full-access`. |
+| `DSH_ENABLE_APPROVAL_RESPONSES` | `false` | Expose working approval responses through MCP instead of Web-UI-only handling. |
+
+Users can configure permissions at two levels:
+
+1. Per task: pass `permission` to `dsh_start_task`, or use `dsh_set_permission` for an existing session.
+2. Installation default: edit the plugin root `.mcp.json` `env` values, restart Codex, and start a new task so the MCP server reloads.
+
+For a read-only default, set `DSH_DEFAULT_PERMISSION=read-only`. Full access requires both
+`DSH_ALLOW_DANGER_FULL_ACCESS=true` and an explicit `danger-full-access` selection for that tool
+call; enabling the gate alone never upgrades a session.
+
+Every `dsh_start_task` may override `permission`; the bridge creates the session, executes DSH's
+host-side `/permission <preset>` command, and only then submits the model task. The DSH presets mean:
+
+- `read-only`: file mutations are denied unless the user grants a wider one-shot operation.
+- `workspace-write`: DSH's Web default; file mutations are confined to the session workspace and
+  supported temporary roots, while reads/network/process visibility are not confined by that file policy.
+- `danger-full-access`: no DSH file-sandbox restriction; disabled by this bridge until the operator opts in.
+
+When `dsh_wait` sees an approval, it returns the exact `rpcId`, `approvalId`, tool, call id, reason,
+and whether MCP responses are enabled. With the safe default, the user answers in DSH Web. If the
+operator sets `DSH_ENABLE_APPROVAL_RESPONSES=true`, Codex can call `dsh_answer_approval` with
+`allow_once` or `reject`, but only after the user explicitly decides. No persistent or automatic
+approval mode is implemented.
+
+A different loopback port can be configured with `DSH_WEB_URL`. Remote hosts, HTTPS URLs,
+credentials, paths, queries, and fragments are rejected deliberately.
 
 ## Development
 

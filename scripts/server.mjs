@@ -1,12 +1,35 @@
 #!/usr/bin/env node
 
 import { createInterface } from 'node:readline'
-import { DshClient, DshRpcError } from '../src/dsh-client.mjs'
+import { DshClient, DshRpcError, parsePermissionPreset } from '../src/dsh-client.mjs'
 
-const SERVER_INFO = { name: 'deepseek-harness-bridge', version: '0.1.0' }
+const SERVER_INFO = { name: 'deepseek-harness-bridge', version: '0.2.0' }
 const SUPPORTED_PROTOCOLS = new Set(['2024-11-05', '2025-03-26', '2025-06-18'])
 const controllers = new Map()
 const client = new DshClient()
+
+function booleanEnv(name, fallback = false) {
+  const value = process.env[name]
+  if (value === undefined || value === '') return fallback
+  if (value === 'true') return true
+  if (value === 'false') return false
+  throw new Error(`${name} must be true or false`)
+}
+
+const APPROVAL_RESPONSES_ENABLED = booleanEnv('DSH_ENABLE_APPROVAL_RESPONSES')
+const DANGER_FULL_ACCESS_ENABLED = booleanEnv('DSH_ALLOW_DANGER_FULL_ACCESS')
+const DEFAULT_PERMISSION = parsePermissionPreset(process.env.DSH_DEFAULT_PERMISSION ?? 'workspace-write')
+if (DEFAULT_PERMISSION === 'danger-full-access' && !DANGER_FULL_ACCESS_ENABLED) {
+  throw new Error('DSH_DEFAULT_PERMISSION=danger-full-access requires DSH_ALLOW_DANGER_FULL_ACCESS=true')
+}
+
+function bridgePolicy() {
+  return {
+    defaultPermission: DEFAULT_PERMISSION,
+    dangerFullAccessEnabled: DANGER_FULL_ACCESS_ENABLED,
+    approvalResponsesEnabled: APPROVAL_RESPONSES_ENABLED,
+  }
+}
 
 const tools = [
   {
@@ -32,11 +55,29 @@ const tools = [
         workspace_id: { type: 'string', minLength: 1, description: 'Existing DSH workspace id; mutually exclusive with cwd.' },
         agent_preset: { type: 'string', minLength: 1, default: 'standard' },
         session_id: { type: 'string', minLength: 1, description: 'Optional caller-supplied session id.' },
+        permission: {
+          type: 'string', enum: ['read-only', 'workspace-write', 'danger-full-access'],
+          description: 'Session permission set before the task is submitted. Defaults to DSH_DEFAULT_PERMISSION. danger-full-access also requires the operator opt-in environment flag.',
+        },
       },
       required: ['task'],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'dsh_set_permission',
+    description: 'Change one existing DSH session permission through the host /permission command. danger-full-access is rejected unless the operator enabled it in plugin configuration.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', minLength: 1 },
+        permission: { type: 'string', enum: ['read-only', 'workspace-write', 'danger-full-access'] },
+      },
+      required: ['session_id', 'permission'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
   },
   {
     name: 'dsh_send',
@@ -67,6 +108,22 @@ const tools = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'dsh_answer_approval',
+    description: 'Allow once or reject one exact pending DSH approval. Disabled by default. Use only after the user explicitly decides; otherwise handle the request in DSH Web.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', minLength: 1 },
+        rpc_id: { type: 'string', minLength: 1 },
+        approval_id: { type: 'string', minLength: 1 },
+        decision: { type: 'string', enum: ['allow_once', 'reject'] },
+      },
+      required: ['session_id', 'rpc_id', 'approval_id', 'decision'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
   },
   {
     name: 'dsh_history',
@@ -117,16 +174,31 @@ function optionalInteger(args, key, fallback, minimum, maximum) {
   return value
 }
 
+function permissionFrom(args, key, fallback) {
+  return parsePermissionPreset(args?.[key] ?? fallback)
+}
+
+function ensurePermissionEnabled(permission) {
+  if (permission === 'danger-full-access' && !DANGER_FULL_ACCESS_ENABLED) {
+    throw new DshRpcError('danger-full-access is disabled by the bridge operator', {
+      code: 'danger-full-access-disabled',
+      details: { requiredEnvironment: 'DSH_ALLOW_DANGER_FULL_ACCESS=true' },
+    })
+  }
+  return permission
+}
+
 async function callTool(name, args, signal) {
   switch (name) {
     case 'dsh_health':
-      return client.health({ signal })
+      return { ...(await client.health({ signal })), bridgePolicy: bridgePolicy() }
     case 'dsh_list_sessions':
       return { sessions: await client.listSessions({ signal }) }
     case 'dsh_start_task': {
       const task = requireString(args, 'task')
       const cwd = optionalString(args, 'cwd')
       const workspaceId = optionalString(args, 'workspace_id')
+      const permission = ensurePermissionEnabled(permissionFrom(args, 'permission', DEFAULT_PERMISSION))
       if (cwd !== undefined && workspaceId !== undefined) throw new DshRpcError('cwd and workspace_id are mutually exclusive', { code: 'invalid-argument' })
       const created = await client.createSession({
         cwd,
@@ -135,12 +207,18 @@ async function callTool(name, args, signal) {
         agentPreset: optionalString(args, 'agent_preset') ?? 'standard',
       }, { signal })
       try {
+        await client.setPermission(created.sessionId, permission, { signal })
         const accepted = await client.prompt(created.sessionId, task, { mode: 'queue', signal })
-        return { ...created, accepted: accepted.accepted === true, visibleInWebUi: true }
+        return { ...created, permission, accepted: accepted.accepted === true, visibleInWebUi: true }
       } catch (error) {
         if (error instanceof DshRpcError) error.details = { ...error.details, createdSessionId: created.sessionId }
         throw error
       }
+    }
+    case 'dsh_set_permission': {
+      const sessionId = requireString(args, 'session_id')
+      const permission = ensurePermissionEnabled(permissionFrom(args, 'permission'))
+      return client.setPermission(sessionId, permission, { signal })
     }
     case 'dsh_send': {
       const sessionId = requireString(args, 'session_id')
@@ -149,12 +227,36 @@ async function callTool(name, args, signal) {
       if (mode !== 'queue' && mode !== 'steer') throw new DshRpcError('mode must be queue or steer', { code: 'invalid-argument' })
       return { sessionId, ...(await client.prompt(sessionId, message, { mode, signal })) }
     }
-    case 'dsh_wait':
-      return client.wait(requireString(args, 'session_id'), {
+    case 'dsh_wait': {
+      const result = await client.wait(requireString(args, 'session_id'), {
         afterSeq: optionalInteger(args, 'after_seq', -1, -1, Number.MAX_SAFE_INTEGER),
         timeoutMs: optionalInteger(args, 'timeout_ms', 30_000, 100, 300_000),
         signal,
       })
+      if (result.kind === 'approval' && result.approval !== undefined) {
+        result.approval.responseEnabled = APPROVAL_RESPONSES_ENABLED
+        result.approval.responseMode = APPROVAL_RESPONSES_ENABLED ? 'mcp-or-web-ui' : 'web-ui-only'
+      }
+      return result
+    }
+    case 'dsh_answer_approval': {
+      if (!APPROVAL_RESPONSES_ENABLED) {
+        throw new DshRpcError('MCP approval responses are disabled; answer in DSH Web instead', {
+          code: 'approval-responses-disabled',
+          details: { requiredEnvironment: 'DSH_ENABLE_APPROVAL_RESPONSES=true' },
+        })
+      }
+      const decision = requireString(args, 'decision')
+      if (decision !== 'allow_once' && decision !== 'reject') {
+        throw new DshRpcError('decision must be allow_once or reject', { code: 'invalid-argument' })
+      }
+      return client.respondApproval({
+        sessionId: requireString(args, 'session_id'),
+        rpcId: requireString(args, 'rpc_id'),
+        approvalId: requireString(args, 'approval_id'),
+        outcome: decision === 'allow_once' ? 'allowed-once' : 'rejected',
+      }, { signal })
+    }
     case 'dsh_history':
       return client.history(requireString(args, 'session_id'), {
         beforeSeq: args?.before_seq === undefined ? undefined : optionalInteger(args, 'before_seq', 0, 0, Number.MAX_SAFE_INTEGER),

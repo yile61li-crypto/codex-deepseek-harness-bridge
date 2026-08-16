@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Control an existing DeepSeek Harness Web session from Codex through MCP.",
   "author": {
     "name": "DeepSeek Harness Bridge contributors"
@@ -16,18 +16,21 @@
   "interface": {
     "displayName": "DeepSeek Harness Bridge",
     "shortDescription": "Delegate Codex tasks to a visible local DSH session.",
-    "longDescription": "Connects Codex to an already running DeepSeek Harness Web process on loopback. Codex can create, continue, inspect, wait for, and cancel DSH sessions while the same work remains visible in the DSH Web UI.",
+    "longDescription": "Connects Codex to an already running DeepSeek Harness Web process on loopback. Codex can create, continue, inspect, wait for, and cancel visible DSH sessions, apply configurable per-session permission presets, and surface exact approval requests without automatic approval.",
     "developerName": "DeepSeek Harness Bridge contributors",
     "category": "Developer Tools",
     "capabilities": [
       "Interactive",
       "Local MCP",
-      "Session streaming"
+      "Session streaming",
+      "Permission controls",
+      "Approval handoff"
     ],
     "defaultPrompt": [
       "Ask DeepSeek Harness to inspect this task and report back.",
       "List the active DeepSeek Harness sessions.",
-      "Continue a DeepSeek Harness session and wait for its result."
+      "Continue a DeepSeek Harness session and wait for its result.",
+      "Start a read-only DeepSeek Harness task and report any approval request without approving it."
     ],
     "brandColor": "#4D6BFE"
   }

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]'])
 const DEFAULT_TIMEOUT_MS = 30_000
+export const PERMISSION_PRESETS = Object.freeze(['read-only', 'workspace-write', 'danger-full-access'])
 
 export class DshRpcError extends Error {
   constructor(message, { code = 'dsh-error', details, method } = {}) {
@@ -38,6 +39,22 @@ export function normalizeBaseUrl(value = 'http://127.0.0.1:3080') {
 function combinedSignal(signal, timeoutMs) {
   const timeout = AbortSignal.timeout(timeoutMs)
   return signal === undefined ? timeout : AbortSignal.any([signal, timeout])
+}
+
+export function parsePermissionPreset(value) {
+  if (!PERMISSION_PRESETS.includes(value)) {
+    throw new DshRpcError(`permission must be one of: ${PERMISSION_PRESETS.join(', ')}`, {
+      code: 'invalid-permission', details: { value },
+    })
+  }
+  return value
+}
+
+function requireWireString(value, name) {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new DshRpcError(`${name} must be a non-empty string`, { code: 'invalid-argument' })
+  }
+  return value
 }
 
 function textFromContent(content) {
@@ -83,6 +100,19 @@ export function summarizeHistoryValue(value) {
   }
 }
 
+export function mergeWaitResult(result, recentEvents, history) {
+  return {
+    ...result,
+    recentEvents,
+    ...history,
+    lastSeq: Math.max(result?.lastSeq ?? -1, history?.lastSeq ?? -1),
+  }
+}
+
+export function waitAbortResult(externalSignal, lastSeq) {
+  return { state: externalSignal?.aborted === true ? 'cancelled' : 'timeout', lastSeq }
+}
+
 function publicSession(item) {
   const values = item?.projections?.values ?? {}
   return {
@@ -112,6 +142,16 @@ export class DshClient {
       body: JSON.stringify({ type: 'client-request', rpcId, method, payload }),
       signal: combinedSignal(signal, timeoutMs),
     }).catch(error => {
+      if (signal?.aborted === true) {
+        throw new DshRpcError(`DeepSeek Harness request was cancelled: ${method}`, {
+          code: 'cancelled', method,
+        })
+      }
+      if (error?.name === 'TimeoutError') {
+        throw new DshRpcError(`DeepSeek Harness request timed out: ${method}`, {
+          code: 'timeout', method,
+        })
+      }
       throw new DshRpcError(`Cannot reach DeepSeek Harness at ${this.baseUrl.origin}: ${String(error)}`, {
         code: 'connection-failed', method,
       })
@@ -161,6 +201,24 @@ export class DshClient {
     return this.rpc('session.create', payload, options)
   }
 
+  async setPermission(sessionId, preset, options) {
+    const permission = parsePermissionPreset(preset)
+    const value = await this.rpc('commands/execute', {
+      args: { agentId: requireWireString(sessionId, 'sessionId'), line: `/permission ${permission}` },
+    }, options)
+    if (value?.result?.kind !== 'success') {
+      throw new DshRpcError(value?.result?.text ?? 'DSH did not accept the /permission command', {
+        code: 'permission-command-failed', method: 'commands/execute', details: { sessionId, permission },
+      })
+    }
+    return {
+      sessionId,
+      permission,
+      commandId: value.commandId,
+      sourceEventSeq: value.result.sourceEventSeq,
+    }
+  }
+
   async prompt(sessionId, text, { mode = 'queue', clientTimeZone, signal } = {}) {
     const payload = { sessionId, mode, content: [{ type: 'text', text }] }
     if (clientTimeZone !== undefined) payload.clientTimeZone = clientTimeZone
@@ -169,6 +227,45 @@ export class DshClient {
 
   async cancel(sessionId, options) {
     return this.rpc('session.cancel', { sessionId }, options)
+  }
+
+  async respondApproval({ sessionId, rpcId, approvalId, outcome }, { signal, timeoutMs = this.timeoutMs } = {}) {
+    requireWireString(sessionId, 'sessionId')
+    requireWireString(rpcId, 'rpcId')
+    requireWireString(approvalId, 'approvalId')
+    if (outcome !== 'allowed-once' && outcome !== 'rejected') {
+      throw new DshRpcError('outcome must be allowed-once or rejected', { code: 'invalid-argument' })
+    }
+    const response = await fetch(new URL('/api/respond', this.baseUrl), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        type: 'client-response', rpcId,
+        result: { ok: true, value: { sessionId, approvalId, outcome } },
+      }),
+      signal: combinedSignal(signal, timeoutMs),
+    }).catch(error => {
+      const code = signal?.aborted === true ? 'cancelled' : error?.name === 'TimeoutError' ? 'timeout' : 'connection-failed'
+      throw new DshRpcError(`Cannot answer DeepSeek Harness approval: ${String(error)}`, {
+        code, method: 'respond',
+      })
+    })
+    if (!response.ok) {
+      throw new DshRpcError(`DeepSeek Harness returned HTTP ${response.status} for approval response`, {
+        code: 'http-error', method: 'respond', details: { status: response.status },
+      })
+    }
+    const receipt = await response.json().catch(error => {
+      throw new DshRpcError(`DeepSeek Harness returned an invalid approval receipt: ${String(error)}`, {
+        code: 'invalid-response', method: 'respond',
+      })
+    })
+    if (receipt?.accepted !== true) {
+      throw new DshRpcError(`DeepSeek Harness rejected the approval response: ${String(receipt?.reason ?? 'unknown')}`, {
+        code: 'approval-response-rejected', method: 'respond', details: { reason: receipt?.reason },
+      })
+    }
+    return { accepted: true, outcome }
   }
 
   async history(sessionId, { beforeSeq, maxMessages = 8, signal } = {}) {
@@ -219,7 +316,16 @@ export class DshClient {
           if (recentEvents.length > 40) recentEvents.shift()
         }
       } else if (frame.type === 'approval/requested') {
-        finish({ state: 'needs_user_action', kind: 'approval', toolName: frame.toolName, lastSeq })
+        finish({
+          state: 'needs_user_action', kind: 'approval', toolName: frame.toolName, lastSeq,
+          approval: {
+            rpcId: envelope.rpcId,
+            approvalId: frame.approvalId,
+            toolName: frame.toolName,
+            ...frame.callId === undefined ? {} : { callId: frame.callId },
+            ...frame.reason === undefined ? {} : { reason: frame.reason },
+          },
+        })
       } else if (frame.type === 'question/requested') {
         finish({ state: 'needs_user_action', kind: 'question', questions: frame.questions, lastSeq })
       } else if (frame.type === 'host/session-status' && frame.running === false) {
@@ -252,11 +358,12 @@ export class DshClient {
       if (!current.running) finish({ state: 'completed', lastSeq: Math.max(lastSeq, current.lastSeq ?? -1) })
 
       const timeoutResult = new Promise(resolve => {
-        activeSignal.addEventListener('abort', () => resolve({ state: 'timeout', lastSeq }), { once: true })
+        activeSignal.addEventListener('abort', () => resolve(waitAbortResult(signal, lastSeq)), { once: true })
       })
       const result = await Promise.race([completed, timeoutResult])
+      if (result.state === 'cancelled') return { ...result, recentEvents }
       const history = await this.history(sessionId, { maxMessages: 8, signal })
-      return { ...result, lastSeq: Math.max(result.lastSeq ?? -1, history.lastSeq), recentEvents, ...history }
+      return mergeWaitResult(result, recentEvents, history)
     } finally {
       clearTimeout(timer)
       for (const socket of sockets) {

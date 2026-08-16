@@ -1,6 +1,6 @@
 {
   "name": "codex-deepseek-harness-bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A dependency-free MCP bridge from Codex to the DeepSeek Harness Web runtime.",
   "type": "module",
   "license": "MIT",
