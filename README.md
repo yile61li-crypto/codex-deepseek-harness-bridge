@@ -88,7 +88,7 @@ conversation**.
 | `DSH_RUNTIME_LOG_DIR` | user state directory | DSH stdout/stderr log location, isolated from MCP stdout. |
 | `DSH_RUNTIME_START_TIMEOUT_MS` | `30000` | Health-wait timeout in milliseconds, from 1000 to 120000. |
 | `DSH_DEFAULT_PERMISSION` | `read-only` | Permission applied before every new task. |
-| `DSH_MAX_PERMISSION` | `workspace-write` | Hard ceiling that tool arguments cannot exceed. Set `read-only` for an absolute read-only bridge. |
+| `DSH_MAX_PERMISSION` | `danger-full-access` | Hard ceiling that tool arguments cannot exceed. Lower it to `workspace-write` or `read-only` when desired. |
 | `DSH_DEFAULT_WORKSPACE_ID` | unset | Registered workspace used when a new task omits its target. |
 | `DSH_DEFAULT_CWD` | unset | Read-only fallback directory; mutually exclusive with the default workspace id. |
 | `DSH_ENABLE_APPROVAL_RESPONSES` | `false` | Expose working approval responses through MCP instead of Web-UI-only handling. |
@@ -101,9 +101,9 @@ Users can configure permissions at two levels:
 1. Per task: pass `permission` to `dsh_start_task`, or use `dsh_set_permission` for an existing session.
 2. Installation default: edit the plugin root `.mcp.json` `env` values, restart Codex, and start a new task so the MCP server reloads.
 
-The default may never exceed the maximum. Full access therefore requires
-`DSH_MAX_PERMISSION=danger-full-access` **and** an explicit `danger-full-access` tool argument;
-changing the ceiling alone never upgrades a session.
+The default may never exceed the maximum. The installed bridge permits every DSH preset up to
+`danger-full-access`, but each new task still starts as `read-only` unless its tool call explicitly
+selects a higher permission. Raising the ceiling never upgrades an existing session by itself.
 
 Every `dsh_start_task` may override `permission`; the bridge creates the session, executes DSH's
 host-side `/permission <preset>` command, and only then submits the model task. The DSH presets mean:
@@ -111,7 +111,7 @@ host-side `/permission <preset>` command, and only then submits the model task. 
 - `read-only`: file mutations are denied, but DSH's file policy does not confine reads, network, or process visibility.
 - `workspace-write`: DSH's Web default; file mutations are confined to the session workspace and
   supported temporary roots, while reads/network/process visibility are not confined by that file policy.
-- `danger-full-access`: no DSH file-sandbox restriction; disabled by this bridge until the operator opts in.
+- `danger-full-access`: no DSH file-sandbox restriction; available when explicitly selected for a registered workspace.
 
 When `dsh_wait` sees an approval or question, it returns the exact request identity, payload,
 observation time, and `mayBeStale=true`. The DSH Web UI remains the safe default. Optional MCP

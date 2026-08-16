@@ -77,7 +77,7 @@ npm ci --ignore-scripts
 | `DSH_RUNTIME_LOG_DIR` | 用户状态目录 | DSH stdout/stderr 日志目录；不会写入 MCP stdout。 |
 | `DSH_RUNTIME_START_TIMEOUT_MS` | `30000` | 等待 DSH 健康的毫秒数，范围 1000–120000。 |
 | `DSH_DEFAULT_PERMISSION` | `read-only` | 每个新任务的默认权限。 |
-| `DSH_MAX_PERMISSION` | `workspace-write` | 工具参数无法越过的权限硬上限；设为 `read-only` 即锁死只读。 |
+| `DSH_MAX_PERMISSION` | `danger-full-access` | 工具参数无法越过的权限硬上限；需要时可降为 `workspace-write` 或 `read-only`。 |
 | `DSH_DEFAULT_WORKSPACE_ID` | 未设置 | 新任务没指定目标时使用的已注册工作区。 |
 | `DSH_DEFAULT_CWD` | 未设置 | 只读任务的默认目录；不能与默认工作区同时设置。 |
 | `DSH_ENABLE_APPROVAL_RESPONSES` | `false` | 是否允许通过 MCP 回复审批；关闭时只能在 DSH 网页处理。 |
@@ -90,8 +90,8 @@ npm ci --ignore-scripts
 1. 单次任务：在 `dsh_start_task` 里指定 `permission`，或用 `dsh_set_permission` 修改某个现有会话。
 2. 安装级默认值：编辑插件根目录 `.mcp.json` 的 `env`，修改上表变量后重启 Codex，并新建任务以重新加载 MCP Server。
 
-默认权限不能高于最大权限。完全访问必须同时把 `DSH_MAX_PERMISSION` 设为 `danger-full-access`，并在该次
-工具调用中再次明确选择 `danger-full-access`；只提高上限不会自动提升任何会话。
+默认权限不能高于最大权限。安装后的桥允许使用 DSH 的全部权限档位，最高为 `danger-full-access`；但新任务
+仍默认使用 `read-only`，只有工具调用明确选择更高权限时才会提升。提高上限本身不会自动提升已有会话。
 
 每次 `dsh_start_task` 都可以用 `permission` 覆盖默认值。插件先创建会话，再调用 DSH 宿主侧
 `/permission <preset>` 命令，成功后才提交模型任务：
@@ -99,7 +99,7 @@ npm ci --ignore-scripts
 - `read-only`：禁止文件修改；但 DSH 的文件策略并不限制读取、网络访问和进程可见性。
 - `workspace-write`：DSH Web 默认值；文件修改限制在会话工作区及受支持的临时目录。该文件策略不限制
   读取、网络访问和进程可见性。
-- `danger-full-access`：不受 DSH 文件沙箱限制；插件默认禁止，必须由操作者显式开启。
+- `danger-full-access`：不受 DSH 文件沙箱限制；对已注册工作区明确选择后即可使用。
 
 `dsh_wait` 遇到审批或问题时会返回精确请求身份、内容、观察时间和 `mayBeStale=true`。安全默认下由用户在
 DSH 网页处理。可选 MCP 回复只接受精确的待处理身份；如果已被网页或其他客户端处理，则幂等返回

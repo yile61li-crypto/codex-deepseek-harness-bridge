@@ -39,7 +39,7 @@ function optionalEnv(name) {
 const APPROVAL_RESPONSES_ENABLED = booleanEnv('DSH_ENABLE_APPROVAL_RESPONSES')
 const QUESTION_RESPONSES_ENABLED = booleanEnv('DSH_ENABLE_QUESTION_RESPONSES')
 const DEFAULT_PERMISSION = parsePermissionPreset(process.env.DSH_DEFAULT_PERMISSION ?? 'read-only')
-const MAX_PERMISSION = parsePermissionPreset(process.env.DSH_MAX_PERMISSION ?? 'workspace-write')
+const MAX_PERMISSION = parsePermissionPreset(process.env.DSH_MAX_PERMISSION ?? 'danger-full-access')
 const DEFAULT_CWD = optionalEnv('DSH_DEFAULT_CWD')
 const DEFAULT_WORKSPACE_ID = optionalEnv('DSH_DEFAULT_WORKSPACE_ID')
 const MAX_CONCURRENT_WAITS = integerEnv('DSH_MAX_CONCURRENT_WAITS', 4, 1, 32)

@@ -19,7 +19,9 @@ it('implements MCP initialize and tools/list over stdio', async () => {
         { sessionId: 's-read', running: false, blank: false, projections: { asOfSeq: 9, values: { permissions: { currentValue: 'read-only' } } } },
       ] }
     } else if (message.method === 'workspace.list') {
-      value = { items: [{ workspaceId: 'w1', path: '/work', title: 'Project', sessionIds: ['s-read'] }], archivedSessionIds: [] }
+      value = { items: [{ workspaceId: 'w1', path: '/work', title: 'Project', sessionIds: ['s-read', 's'] }], archivedSessionIds: [] }
+    } else if (message.method === 'commands/execute') {
+      value = { commandId: 'c-permission', result: { kind: 'success', sourceEventSeq: 10 } }
     } else if (message.method === 'session.prompt') {
       value = { accepted: true }
     } else {
@@ -70,9 +72,12 @@ it('implements MCP initialize and tools/list over stdio', async () => {
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 12, method: 'tools/call', params: {
     name: 'dsh_ensure_runtime', arguments: {},
   } })}\n`)
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 13, method: 'tools/call', params: {
+    name: 'dsh_health', arguments: {},
+  } })}\n`)
 
   const deadline = Date.now() + 5_000
-  while (replies.length < 12 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
+  while (replies.length < 13 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
   child.kill()
   await once(child, 'exit')
   await new Promise(resolve => dsh.close(resolve))
@@ -92,13 +97,12 @@ it('implements MCP initialize and tools/list over stdio', async () => {
   assert.equal(startTool.annotations.openWorldHint, true)
   assert.equal(byId[3].result.isError, true)
   assert.equal(byId[3].result.structuredContent.error, 'approval-responses-disabled')
-  assert.equal(byId[4].result.isError, true)
-  assert.equal(byId[4].result.structuredContent.error, 'permission-exceeds-maximum')
+  assert.equal(byId[4].result.structuredContent.permission, 'danger-full-access')
   assert.equal(byId[5].result.structuredContent.error, 'question-responses-disabled')
   assert.equal(byId[6].result.structuredContent.error, 'invalid-argument')
   assert.equal(byId[7].result.structuredContent.error, 'task-target-required')
   assert.equal(byId[8].result.structuredContent.error, 'registered-workspace-required')
-  assert.equal(byId[9].result.structuredContent.error, 'session-permission-exceeds-maximum')
+  assert.equal(byId[9].result.structuredContent.error, 'registered-workspace-required')
   assert.equal(byId[10].result.structuredContent.sessionId, 's-read')
   assert.equal(byId[10].result.structuredContent.waitAfterSeq, 9)
   assert.equal(typeof byId[10].result.structuredContent.promptRpcId, 'string')
@@ -106,6 +110,10 @@ it('implements MCP initialize and tools/list over stdio', async () => {
   assert.equal(byId[11].result.structuredContent.startMode, 'existing')
   assert.equal(byId[12].result.structuredContent.reachable, true)
   assert.equal(byId[12].result.structuredContent.startMode, 'existing')
+  assert.equal(byId[13].result.structuredContent.bridgePolicy.defaultPermission, 'read-only')
+  assert.equal(byId[13].result.structuredContent.bridgePolicy.maxPermission, 'danger-full-access')
+  const permissionCommand = dshRequests.find(request => request.method === 'commands/execute')
+  assert.equal(permissionCommand.payload.args.line, '/permission danger-full-access')
   const submitted = dshRequests.find(request => request.method === 'session.prompt')
   assert.equal(submitted.payload.sessionId, 's-read')
   assert.equal(submitted.payload.content[0].text, 'continue exactly this session')

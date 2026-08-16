@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- The default permission ceiling now exposes DSH's highest `danger-full-access` preset while new tasks remain read-only unless explicitly elevated.
+
 ## [0.4.0] - 2026-08-16
 
 ### Added

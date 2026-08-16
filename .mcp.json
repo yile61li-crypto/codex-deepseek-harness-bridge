@@ -15,7 +15,7 @@
         "DSH_RUNTIME_LOG_DIR": "",
         "DSH_RUNTIME_START_TIMEOUT_MS": "30000",
         "DSH_DEFAULT_PERMISSION": "read-only",
-        "DSH_MAX_PERMISSION": "workspace-write",
+        "DSH_MAX_PERMISSION": "danger-full-access",
         "DSH_DEFAULT_CWD": "",
         "DSH_DEFAULT_WORKSPACE_ID": "",
         "DSH_ENABLE_APPROVAL_RESPONSES": "false",
