@@ -22,7 +22,11 @@ DeepSeek Harness”：插件先执行 `dsh_ensure_runtime`，健康后再调用 
 git clone https://github.com/yile61li-crypto/codex-deepseek-harness-bridge.git
 cd codex-deepseek-harness-bridge
 npm ci --ignore-scripts
+npm rebuild node-pty --foreground-scripts
 ```
+
+显式重建不可省略：托管启动 DSH 时会加载 `node-pty`；Linux 没有匹配预编译文件时，需要在本机编译其
+原生模块。
 
 这会按 `package-lock.json` 安装锁定的官方 DSH 运行时；如果只连接用户已启动的 DSH，则 MCP 读取工具
 本身没有第三方运行时依赖。

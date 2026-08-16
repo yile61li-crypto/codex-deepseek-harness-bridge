@@ -36,7 +36,11 @@ function request(method, params = {}) {
 
 async function tool(name, args = {}) {
   const result = await request('tools/call', { name, arguments: args })
-  if (result.isError === true) throw new Error(`${name}: ${result.structuredContent?.message ?? 'tool error'}`)
+  if (result.isError === true) {
+    const structured = result.structuredContent
+    const details = structured?.details === undefined ? '' : ` ${JSON.stringify(structured.details)}`
+    throw new Error(`${name}: ${structured?.message ?? 'tool error'}${details}`)
+  }
   return result.structuredContent
 }
 

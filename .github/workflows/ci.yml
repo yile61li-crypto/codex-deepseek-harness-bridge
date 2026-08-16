@@ -27,8 +27,10 @@ jobs:
         with:
           node-version: '22.19.0'
           cache: npm
-      - name: Install the pinned DSH runtime dependency
+      - name: Install pinned dependencies without lifecycle scripts
         run: npm ci --ignore-scripts
+      - name: Build the pinned native terminal dependency
+        run: npm rebuild node-pty --foreground-scripts
       - name: Audit production dependencies against the official registry
         run: npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
       - name: Verify source, tests, and plugin manifests

@@ -27,7 +27,11 @@ For a source checkout, install the pinned official runtime once from the plugin 
 git clone https://github.com/yile61li-crypto/codex-deepseek-harness-bridge.git
 cd codex-deepseek-harness-bridge
 npm ci --ignore-scripts
+npm rebuild node-pty --foreground-scripts
 ```
+
+The explicit rebuild is required because managed DSH startup loads `node-pty`; Linux packages build
+its native module locally when no matching prebuild is available.
 
 The bridge can still connect to an externally started DSH without this dependency; managed startup
 requires it unless `DSH_RUNTIME_COMMAND` is configured.
