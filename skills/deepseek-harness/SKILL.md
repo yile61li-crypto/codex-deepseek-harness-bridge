@@ -1,6 +1,6 @@
 ---
 name: deepseek-harness
-description: Start, open, inspect, and operate DeepSeek Harness from Codex. Use when the user asks to open or view DSH in Codex, start its local Web runtime, delegate a task to DeepSeek Harness, inspect or continue one exact DSH conversation, handle a DSH approval or question, or analyze a DSH image attachment through an isolated Codex vision subagent.
+description: Start, open, inspect, and operate DeepSeek Harness from Codex. Use when the user asks to open or view DSH in Codex, start its local Web runtime, delegate a task, decide whether related work should reuse an exact DSH conversation, handle a DSH approval or question, or analyze a DSH image attachment through an isolated Codex vision subagent.
 ---
 
 # DeepSeek Harness
@@ -17,10 +17,14 @@ Keep the page visible when the user asks to watch DSH work.
 
 ## Choose the conversation deliberately
 
-- Use `dsh_start_task` only for a new conversation. Select an existing `workspace_id`; if the user did not specify a target, list workspaces and sessions, then ask instead of creating an ungrouped session.
+- Default to continuing the exact bound DSH conversation when the new request depends on, refines, verifies, fixes, documents, or implements the same objective or artifact. Planning, coding, testing, debugging, review, and follow-up questions for one project normally belong in one conversation.
+- Keep a task-local binding of `session_id`, workspace, and purpose after `dsh_start_task`, `dsh_fork_session`, or an explicit session selection. Use `dsh_send` with that exact ID for related work. Never use a process-global or merely most-recent session.
+- For a running related turn, use `steer` only to refine its current work; use `queue` for the next related turn. Do not open a new conversation merely because another tool call is needed, the previous turn completed, or time elapsed.
+- Use `dsh_start_task` only when the user explicitly requests a new conversation, the objective is materially unrelated, the workspace or trust boundary differs, or an independent parallel task needs isolated progress. Select an existing `workspace_id`; never create an ungrouped session.
+- With no task-local binding, inspect bounded session metadata/history. Continue without asking only when one candidate has strong evidence of the same workspace and objective. If multiple candidates are plausible or relevance is uncertain, ask one short question before sending or starting anything.
+- Prefer the user's explicit session choice over these heuristics. Never merge unrelated tasks merely to avoid creating a session, and never fork solely as a substitute for ordinary continuation.
 - Call `dsh_create_workspace` only when the user explicitly asks to create/register a new workspace or group and supplies or confirms its existing absolute directory. Set `user_confirmed=true` only for that explicit request. Otherwise list existing workspaces and ask; never create one as a fallback.
 - Call `dsh_set_default_permission` only when the user explicitly asks to change the persistent default. Set `user_confirmed=true` only for that request. Explain that it affects future tasks, not existing sessions, and still cannot exceed the installation maximum.
-- Use `dsh_send` with an exact `session_id` for every continuation. Never use a process-global "last session".
 - Pass `promptRpcId` and `waitAfterSeq` from start/send into `dsh_wait` so an earlier turn cannot be mistaken for the requested result.
 - Default to read-only. Never raise the configured permission ceiling or answer approvals/questions without the user's explicit decision.
 

@@ -64,24 +64,32 @@ never auto-approves tools or answers questions.
 
 ## New session or continued session
 
-The bridge does not maintain a process-wide "last session" because concurrent Codex tasks could
-silently write to the wrong DSH conversation.
+The default is **reuse when related, create only at a real boundary**. One project normally keeps
+planning, implementation, testing, debugging, review, documentation, and follow-up questions in
+the same exact DSH session. Another MCP call, a completed turn, or elapsed time is not a reason to
+start over.
 
-- To continue work, retain the `sessionId` returned by `dsh_start_task` or `dsh_fork_session` and
+- To continue related work, retain the `sessionId` returned by `dsh_start_task` or `dsh_fork_session` and
   pass it to every later `dsh_send`. The result includes `waitAfterSeq`; pass that value to
   `dsh_wait.after_seq`, and pass `promptRpcId` to `dsh_wait.prompt_rpc_id`. Together they prevent
   an older answer—or the turn ahead of a queued follow-up—from being reported as the requested result.
-- To start new work, choose a registered `workspace_id` or an absolute `cwd`. If neither a tool
+- Start a new session only when the user asks for one, the objective is materially unrelated, the
+  workspace or trust boundary changes, or independent parallel work needs isolation. Choose a
+  registered `workspace_id` or an absolute `cwd`. If neither a tool
   argument nor an installation default exists, `dsh_start_task` fails with `task-target-required`;
   Codex should list workspaces/sessions and ask the user what to do.
+- When no exact session is bound, Codex may inspect bounded session metadata/history. It continues
+  automatically only when one candidate clearly matches both workspace and objective; ambiguous
+  candidates require one short user question. Recency alone is never sufficient.
 - Creating a workspace/group is allowed only through the separate `dsh_create_workspace` tool after
   the user explicitly requests it. The required `user_confirmed=true` flag must never be inferred;
   the tool registers an existing absolute directory and never creates or deletes filesystem content.
 - Writable permissions require a registered `workspace_id`. An arbitrary `cwd` is accepted only
   for `read-only`, preventing a model-selected path from enlarging the write sandbox.
 
-`dsh_start_task` always means **new conversation**. `dsh_send` always means **continue this exact
-conversation**.
+The bridge deliberately has no process-wide "last session", because concurrent Codex tasks could
+silently write to the wrong conversation. The binding is task-local: `dsh_start_task` means **new
+conversation**, while `dsh_send` means **continue this exact conversation**.
 
 ## Configuration
 

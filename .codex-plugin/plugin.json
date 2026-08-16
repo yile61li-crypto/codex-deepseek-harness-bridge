@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-bridge",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Start, open, and control DeepSeek Harness from Codex through MCP.",
   "author": {
     "name": "DeepSeek Harness Bridge contributors"
@@ -17,7 +17,7 @@
   "interface": {
     "displayName": "DeepSeek Harness Bridge",
     "shortDescription": "Delegate Codex tasks to a visible local DSH session.",
-    "longDescription": "Starts or reuses a loopback DeepSeek Harness Web runtime, opens it in Codex's built-in browser, and provides deliberate workspace placement, persistent session continuation, bounded history, permission ceilings, and exact user-action handoff.",
+    "longDescription": "Starts or reuses a loopback DeepSeek Harness Web runtime, opens it in Codex's built-in browser, and provides relevance-based session reuse, deliberate workspace placement, bounded history, permission ceilings, and exact user-action handoff.",
     "developerName": "DeepSeek Harness Bridge contributors",
     "category": "Developer Tools",
     "capabilities": [
@@ -36,6 +36,7 @@
       "List my DeepSeek Harness workspaces and ask where a new task should run.",
       "List the active DeepSeek Harness sessions.",
       "Continue a specific DeepSeek Harness session and wait only for its new result.",
+      "Reuse a related DeepSeek Harness conversation, or ask before starting an unrelated one.",
       "Analyze an image from a DeepSeek Harness session in an isolated Codex vision subagent.",
       "Start a read-only DeepSeek Harness task and report any approval request without approving it."
     ],

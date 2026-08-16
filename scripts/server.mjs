@@ -6,7 +6,7 @@ import { DshClient, DshRpcError, parsePermissionPreset } from '../src/dsh-client
 import { DshRuntimeError, DshRuntimeManager } from '../src/dsh-runtime.mjs'
 import { PermissionSettings, PermissionSettingsError } from '../src/permission-settings.mjs'
 
-const SERVER_INFO = { name: 'deepseek-harness-bridge', version: '0.5.0' }
+const SERVER_INFO = { name: 'deepseek-harness-bridge', version: '0.5.1' }
 const SUPPORTED_PROTOCOLS = new Set(['2024-11-05', '2025-03-26', '2025-06-18'])
 const PERMISSION_RANK = Object.freeze({ 'read-only': 0, 'workspace-write': 1, 'danger-full-access': 2 })
 const MCP_IMAGE_RESULT = Symbol('mcp-image-result')
@@ -78,6 +78,8 @@ function bridgePolicy() {
     modelRequestsPerMinute: MODEL_REQUESTS_PER_MINUTE,
     runtimeStartTimeoutMs: RUNTIME_START_TIMEOUT_MS,
     maxAttachmentBytes: MAX_ATTACHMENT_BYTES,
+    conversationRouting: 'reuse-related-exact-session',
+    implicitGlobalLastSession: false,
   }
 }
 
@@ -189,7 +191,7 @@ const tools = [
   },
   {
     name: 'dsh_start_task',
-    description: 'Always create a new visible DSH session and submit a model task. A workspace target is required; use dsh_send with the returned session_id for every follow-up.',
+    description: 'Create a new visible DSH session only for an explicit new conversation, a materially unrelated objective, a different workspace/trust boundary, or isolated parallel work. Use dsh_send for related follow-ups.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -244,7 +246,7 @@ const tools = [
   },
   {
     name: 'dsh_send',
-    description: 'Continue a visible DSH session. Queue starts a later turn; steer guides a currently running turn.',
+    description: 'Continue one exact visible DSH session; this is the default for related planning, implementation, testing, fixes, documentation, and follow-ups. Queue starts a later turn; steer refines a currently running turn.',
     inputSchema: {
       type: 'object',
       properties: {

@@ -145,6 +145,8 @@ it('implements MCP initialize and tools/list over stdio', async t => {
   assert.equal(byId[12].result.structuredContent.startMode, 'existing')
   assert.equal(byId[13].result.structuredContent.bridgePolicy.defaultPermission, 'read-only')
   assert.equal(byId[13].result.structuredContent.bridgePolicy.maxPermission, 'danger-full-access')
+  assert.equal(byId[13].result.structuredContent.bridgePolicy.conversationRouting, 'reuse-related-exact-session')
+  assert.equal(byId[13].result.structuredContent.bridgePolicy.implicitGlobalLastSession, false)
   assert.equal(byId[14].result.structuredContent.error, 'invalid-argument')
   assert.equal(byId[15].result.structuredContent.created, true)
   assert.equal(byId[15].result.structuredContent.workspace.workspaceId, 'w2')

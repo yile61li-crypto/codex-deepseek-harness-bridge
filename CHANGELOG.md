@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-17
+
+### Changed
+
+- Related work now reuses an exact task-local DSH session by default; new sessions are reserved for explicit, unrelated, cross-workspace, trust-boundary, or independent parallel work.
+- Ambiguous session selection asks the user instead of choosing by recency or creating a new ungrouped conversation.
+
 ## [0.5.0] - 2026-08-17
 
 ### Changed
