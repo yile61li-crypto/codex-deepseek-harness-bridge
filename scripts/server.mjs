@@ -4,6 +4,7 @@ import { createInterface } from 'node:readline'
 import { isAbsolute, parse, resolve } from 'node:path'
 import { DshClient, DshRpcError, parsePermissionPreset } from '../src/dsh-client.mjs'
 import { DshRuntimeError, DshRuntimeManager } from '../src/dsh-runtime.mjs'
+import { PermissionSettings, PermissionSettingsError } from '../src/permission-settings.mjs'
 
 const SERVER_INFO = { name: 'deepseek-harness-bridge', version: '0.4.0' }
 const SUPPORTED_PROTOCOLS = new Set(['2024-11-05', '2025-03-26', '2025-06-18'])
@@ -38,14 +39,14 @@ function optionalEnv(name) {
 
 const APPROVAL_RESPONSES_ENABLED = booleanEnv('DSH_ENABLE_APPROVAL_RESPONSES')
 const QUESTION_RESPONSES_ENABLED = booleanEnv('DSH_ENABLE_QUESTION_RESPONSES')
-const DEFAULT_PERMISSION = parsePermissionPreset(process.env.DSH_DEFAULT_PERMISSION ?? 'read-only')
+const INSTALLATION_DEFAULT_PERMISSION = parsePermissionPreset(process.env.DSH_DEFAULT_PERMISSION ?? 'read-only')
 const MAX_PERMISSION = parsePermissionPreset(process.env.DSH_MAX_PERMISSION ?? 'danger-full-access')
 const DEFAULT_CWD = optionalEnv('DSH_DEFAULT_CWD')
 const DEFAULT_WORKSPACE_ID = optionalEnv('DSH_DEFAULT_WORKSPACE_ID')
 const MAX_CONCURRENT_WAITS = integerEnv('DSH_MAX_CONCURRENT_WAITS', 4, 1, 32)
 const MODEL_REQUESTS_PER_MINUTE = integerEnv('DSH_MODEL_REQUESTS_PER_MINUTE', 12, 1, 120)
 const RUNTIME_START_TIMEOUT_MS = integerEnv('DSH_RUNTIME_START_TIMEOUT_MS', 30_000, 1_000, 120_000)
-if (PERMISSION_RANK[DEFAULT_PERMISSION] > PERMISSION_RANK[MAX_PERMISSION]) {
+if (PERMISSION_RANK[INSTALLATION_DEFAULT_PERMISSION] > PERMISSION_RANK[MAX_PERMISSION]) {
   throw new Error('DSH_DEFAULT_PERMISSION must not exceed DSH_MAX_PERMISSION')
 }
 if (DEFAULT_CWD !== undefined && DEFAULT_WORKSPACE_ID !== undefined) {
@@ -56,10 +57,15 @@ const runtime = new DshRuntimeManager({
   env: process.env,
   startupTimeoutMs: RUNTIME_START_TIMEOUT_MS,
 })
+const permissionSettings = new PermissionSettings({
+  env: process.env,
+  maxPermission: MAX_PERMISSION,
+  installationDefault: INSTALLATION_DEFAULT_PERMISSION,
+})
 
 function bridgePolicy() {
   return {
-    defaultPermission: DEFAULT_PERMISSION,
+    defaultPermission: permissionSettings.defaultPermission,
     maxPermission: MAX_PERMISSION,
     defaultTarget: DEFAULT_WORKSPACE_ID === undefined
       ? DEFAULT_CWD === undefined ? null : { cwd: DEFAULT_CWD }
@@ -90,6 +96,20 @@ const tools = [
     description: 'Check the loopback DSH runtime and report the bridge safety policy. host.version is only DSH\'s reported API placeholder, not a reliable product version.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'dsh_set_default_permission',
+    description: 'Persist the default permission for future DSH tasks. Call only after the user explicitly requests this setting change; existing sessions are never modified.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        permission: { type: 'string', enum: ['read-only', 'workspace-write', 'danger-full-access'] },
+        user_confirmed: { type: 'boolean', enum: [true], description: 'Must be true only when the user explicitly requested this default change.' },
+      },
+      required: ['permission', 'user_confirmed'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   },
   {
     name: 'dsh_list_workspaces',
@@ -504,6 +524,14 @@ async function callTool(name, args, signal) {
         bridgePolicy: bridgePolicy(),
       }
     }
+    case 'dsh_set_default_permission': {
+      const permission = ensurePermissionAllowed(permissionFrom(args, 'permission'))
+      return {
+        ...(await permissionSettings.setDefault(permission)),
+        maxPermission: MAX_PERMISSION,
+        appliesTo: 'future-tasks-only',
+      }
+    }
     case 'dsh_list_workspaces':
       return client.listWorkspaces({ signal })
     case 'dsh_create_workspace':
@@ -550,7 +578,7 @@ async function callTool(name, args, signal) {
       return client.getModels(requireString(args, 'session_id'), { signal })
     case 'dsh_start_task': {
       const task = requireString(args, 'task')
-      const permission = ensurePermissionAllowed(permissionFrom(args, 'permission', DEFAULT_PERMISSION))
+      const permission = ensurePermissionAllowed(permissionFrom(args, 'permission', permissionSettings.defaultPermission))
       const target = resolveTaskTarget(args, permission)
       consumeModelRequestQuota()
       const created = await client.createSession({
@@ -706,7 +734,7 @@ function toolResult(value) {
 }
 
 function toolError(error) {
-  const structured = error instanceof DshRpcError || error instanceof DshRuntimeError
+  const structured = error instanceof DshRpcError || error instanceof DshRuntimeError || error instanceof PermissionSettingsError
   const value = {
     error: structured ? error.code : 'internal-error',
     message: error instanceof Error ? error.message : String(error),

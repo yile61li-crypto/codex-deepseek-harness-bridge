@@ -10,6 +10,7 @@ All notable changes to this project are documented here. The format is based on
 
 - The default permission ceiling now exposes DSH's highest `danger-full-access` preset while new tasks remain read-only unless explicitly elevated.
 - New DSH workspace/group registration is available only through an explicit, user-confirmed tool call and is never used as an implicit task fallback.
+- Users can explicitly persist the default permission for future tasks without editing plugin files; the configured maximum remains authoritative.
 
 ## [0.4.0] - 2026-08-16
 

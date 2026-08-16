@@ -41,6 +41,7 @@ After installation, start a new Codex task so the MCP tool catalog is refreshed.
 | `dsh_health` | Check DSH plus bridge policy and optional capabilities. |
 | `dsh_list_workspaces` | List registered workspaces and grouped session ids. |
 | `dsh_create_workspace` | Explicitly register an existing directory as a new workspace/group. |
+| `dsh_set_default_permission` | Explicitly persist the default permission for future tasks. |
 | `dsh_list_agent_presets` | List available and broken agent presets. |
 | `dsh_list_sessions` | List and filter recent sessions. |
 | `dsh_get_session` | Read one exact session and optional bounded history. |
@@ -91,8 +92,9 @@ conversation**.
 | `DSH_RUNTIME_CWD` | dedicated state directory | Optional managed-runtime working directory; never defaults to plugin source and remains independent of task workspace selection. |
 | `DSH_RUNTIME_LOG_DIR` | user state directory | DSH stdout/stderr log location, isolated from MCP stdout. |
 | `DSH_RUNTIME_START_TIMEOUT_MS` | `30000` | Health-wait timeout in milliseconds, from 1000 to 120000. |
-| `DSH_DEFAULT_PERMISSION` | `read-only` | Permission applied before every new task. |
+| `DSH_DEFAULT_PERMISSION` | `read-only` | Initial default used until the user persistently changes it. |
 | `DSH_MAX_PERMISSION` | `danger-full-access` | Hard ceiling that tool arguments cannot exceed. Lower it to `workspace-write` or `read-only` when desired. |
+| `DSH_SETTINGS_FILE` | `~/.deepseek-harness-bridge/settings.json` | Optional absolute path for persistent bridge settings. |
 | `DSH_DEFAULT_WORKSPACE_ID` | unset | Registered workspace used when a new task omits its target. |
 | `DSH_DEFAULT_CWD` | unset | Read-only fallback directory; mutually exclusive with the default workspace id. |
 | `DSH_ENABLE_APPROVAL_RESPONSES` | `false` | Expose working approval responses through MCP instead of Web-UI-only handling. |
@@ -106,8 +108,11 @@ Users can configure permissions at two levels:
 2. Installation default: edit the plugin root `.mcp.json` `env` values, restart Codex, and start a new task so the MCP server reloads.
 
 The default may never exceed the maximum. The installed bridge permits every DSH preset up to
-`danger-full-access`, but each new task still starts as `read-only` unless its tool call explicitly
-selects a higher permission. Raising the ceiling never upgrades an existing session by itself.
+`danger-full-access`, but each new task initially starts as `read-only` unless its tool call explicitly
+selects a higher permission. A user may explicitly call `dsh_set_default_permission` to persist a
+different default for future tasks. The required confirmation must not be inferred, and neither a
+ceiling nor default change upgrades an existing session. A persisted default overrides the initial
+environment value but is always capped by `DSH_MAX_PERMISSION`.
 
 Every `dsh_start_task` may override `permission`; the bridge creates the session, executes DSH's
 host-side `/permission <preset>` command, and only then submits the model task. The DSH presets mean:

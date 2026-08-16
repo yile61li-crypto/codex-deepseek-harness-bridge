@@ -16,6 +16,7 @@
         "DSH_RUNTIME_START_TIMEOUT_MS": "30000",
         "DSH_DEFAULT_PERMISSION": "read-only",
         "DSH_MAX_PERMISSION": "danger-full-access",
+        "DSH_SETTINGS_FILE": "",
         "DSH_DEFAULT_CWD": "",
         "DSH_DEFAULT_WORKSPACE_ID": "",
         "DSH_ENABLE_APPROVAL_RESPONSES": "false",
