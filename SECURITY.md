@@ -30,6 +30,7 @@ attachments, and history text are bounded. Tool arguments/results are omitted un
 requested. Managed runtime logs use private directory and file permissions where the platform
 supports POSIX modes.
 
-Please report security issues privately through GitHub's **Security → Report a vulnerability** flow
-once it is enabled for the published repository. Until a verified private channel is listed, do not
-include exploit details, credentials, private paths, or prompts in a public issue.
+Please report security issues privately through the repository's
+[Security → Report a vulnerability](https://github.com/yile61li-crypto/codex-deepseek-harness-bridge/security/advisories/new)
+flow once it is enabled. Until that private channel is available, do not include exploit details,
+credentials, private paths, or prompts in a public issue.

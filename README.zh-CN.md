@@ -19,6 +19,8 @@ DeepSeek Harness”：插件先执行 `dsh_ensure_runtime`，健康后再调用 
 从源码安装时先在插件目录执行一次：
 
 ```sh
+git clone https://github.com/yile61li-crypto/codex-deepseek-harness-bridge.git
+cd codex-deepseek-harness-bridge
 npm ci --ignore-scripts
 ```
 

@@ -74,7 +74,7 @@ publishing a release, maintainers should:
 4. inspect `npm run pack:dry-run` output;
 5. run `npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org` and
    `npm run package:smoke`;
-6. configure the Git remote, then add verified `repository`, `homepage`, and `bugs` metadata to
-   `package.json`—never publish placeholder URLs;
+6. verify that `repository`, `homepage`, and `bugs` metadata still point to the canonical GitHub
+   repository—never publish placeholder URLs;
 7. enable GitHub private vulnerability reporting or document another verified private contact;
 8. tag the exact reviewed commit.

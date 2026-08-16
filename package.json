@@ -5,7 +5,15 @@
   "type": "module",
   "license": "MIT",
   "private": false,
-  "author": "DeepSeek Harness Bridge contributors",
+  "author": "yile61li-crypto",
+  "homepage": "https://github.com/yile61li-crypto/codex-deepseek-harness-bridge#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yile61li-crypto/codex-deepseek-harness-bridge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yile61li-crypto/codex-deepseek-harness-bridge/issues"
+  },
   "keywords": [
     "codex",
     "deepseek",

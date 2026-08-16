@@ -24,6 +24,8 @@ runtime first and then opens the verified URL in Codex's own right-side Browser 
 For a source checkout, install the pinned official runtime once from the plugin directory:
 
 ```sh
+git clone https://github.com/yile61li-crypto/codex-deepseek-harness-bridge.git
+cd codex-deepseek-harness-bridge
 npm ci --ignore-scripts
 ```
 
