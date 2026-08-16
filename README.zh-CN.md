@@ -14,7 +14,8 @@ DSH 进程与会话存储，因此新会话、思考过程、工具调用和最�
 
 将本仓库作为 Codex 插件安装，或者把它加入兼容的 Agent Plugins marketplace。仓库内的
 `.mcp.json` 会用 Node 启动 MCP Server，并且只允许连接本机回环地址。安装依赖后，用户只需说“打开
-DeepSeek Harness”：插件先执行 `dsh_ensure_runtime`，健康后再调用 Codex 自带的 Browser 在右侧打开页面。
+DeepSeek Harness”：插件先执行 `dsh_ensure_runtime`，健康后再调用 Codex 自带的 Browser 在右侧打开页面；
+若当前 Codex 构建没有对应宿主工具，则返回准确的本机回环地址供用户手动打开。
 
 从源码安装时先在插件目录执行一次：
 

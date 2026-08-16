@@ -19,7 +19,8 @@ in the DSH Web UI.
 Install this repository as a Codex plugin or add it to a compatible Agent Plugins marketplace.
 The included `.mcp.json` starts the MCP server with Node and connects only to the loopback DSH URL.
 After dependencies are installed, ask Codex to “open DeepSeek Harness”: the plugin ensures the
-runtime first and then opens the verified URL in Codex's own right-side Browser panel.
+runtime first and then opens the verified URL in Codex's own right-side Browser panel. On Codex
+builds without that host UI tool, it returns the exact loopback URL for manual opening instead.
 
 For a source checkout, install the pinned official runtime once from the plugin directory:
 

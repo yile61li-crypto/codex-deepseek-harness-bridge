@@ -79,7 +79,7 @@ async function probeServer(serverPath, cwd, settingsFile) {
     })
     child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`)
     const listed = await request('tools/list')
-    if (initialized.serverInfo?.version !== '0.6.0') {
+    if (initialized.serverInfo?.version !== '0.6.1') {
       throw new Error(`packed server reported unexpected version: ${initialized.serverInfo?.version}`)
     }
     if (!Array.isArray(listed.tools) || listed.tools.length === 0) {
@@ -121,7 +121,7 @@ try {
   npm(['run', 'verify'], installed)
   const result = await probeServer(
     path.join(installed, 'scripts', 'server.mjs'),
-    installed,
+    consumer,
     path.join(scratch, 'settings.json'),
   )
   process.stdout.write(`Packed artifact smoke passed: v${result.version}, ${result.toolCount} tools\n`)

@@ -1,6 +1,6 @@
 {
   "name": "codex-deepseek-harness-bridge",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "A local-first MCP bridge that lets Codex operate visible DeepSeek Harness sessions.",
   "type": "module",
   "license": "MIT",

@@ -10,8 +10,8 @@ description: Start, open, inspect, and operate DeepSeek Harness from Codex. Use 
 1. Call `dsh_ensure_runtime` with no arguments. It starts the bundled DSH Web runtime only when the configured loopback URL is not already healthy.
 2. Require `reachable: true` in the result. Use its exact `baseUrl`; never substitute a remote URL.
 3. Check Codex in-app Browser tabs first. If one already has the exact `baseUrl`, claim and show that tab and mark it deliverable instead of opening a duplicate.
-4. Otherwise call Codex's `open_in_codex` host tool with `target: {type: "browser", url: baseUrl}` and `placement: "right"`.
-5. Report that the page opened only after the browser or host tool succeeds. MCP alone cannot control Codex UI.
+4. Otherwise, when available, call Codex's `open_in_codex` host tool with `target: {type: "browser", url: baseUrl}` and `placement: "right"`.
+5. Report that the page opened only after the browser or host tool succeeds. If the host tool is unavailable or fails, leave DSH running and return the exact loopback `baseUrl` for the user to open manually. MCP alone cannot control Codex UI.
 
 Keep the page visible when the user asks to watch DSH work.
 
@@ -44,4 +44,4 @@ If collaboration subagents are unavailable, report that visual isolation is unav
 
 - If runtime startup fails, return the structured error and log path. Do not install software or switch to a remote DSH host automatically.
 - An already-running runtime is external ownership. Never stop or restart it.
-- If browser opening fails after DSH becomes healthy, leave DSH running and report only the UI handoff failure.
+- If browser opening fails after DSH becomes healthy, leave DSH running, report only the UI handoff failure, and return the exact loopback `baseUrl` for manual opening.

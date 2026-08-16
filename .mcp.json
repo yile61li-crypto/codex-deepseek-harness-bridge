@@ -6,7 +6,6 @@
       "args": [
         "${PLUGIN_ROOT}/scripts/server.mjs"
       ],
-      "cwd": "${PLUGIN_ROOT}",
       "env": {
         "DSH_WEB_URL": "http://127.0.0.1:3080",
         "DSH_RUNTIME_COMMAND": "",

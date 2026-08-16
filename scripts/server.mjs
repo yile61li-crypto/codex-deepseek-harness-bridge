@@ -7,7 +7,7 @@ import { DshClient, DshRpcError, parsePermissionPreset } from '../src/dsh-client
 import { DshRuntimeError, DshRuntimeManager } from '../src/dsh-runtime.mjs'
 import { PermissionSettings, PermissionSettingsError } from '../src/permission-settings.mjs'
 
-const SERVER_INFO = { name: 'deepseek-harness-bridge', version: '0.6.0' }
+const SERVER_INFO = { name: 'deepseek-harness-bridge', version: '0.6.1' }
 const SUPPORTED_PROTOCOLS = new Set(['2024-11-05', '2025-03-26', '2025-06-18'])
 const PERMISSION_RANK = Object.freeze({ 'read-only': 0, 'workspace-write': 1, 'danger-full-access': 2 })
 const MCP_IMAGE_RESULT = Symbol('mcp-image-result')

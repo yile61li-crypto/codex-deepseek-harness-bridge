@@ -195,6 +195,9 @@ if (!isObject(mcp?.mcpServers) || Object.keys(mcp.mcpServers).length === 0) {
 } else {
   for (const [name, server] of Object.entries(mcp.mcpServers)) {
     if (!isObject(server)) errors.push(`.mcp.json.mcpServers.${name} must be an object`);
+    else if (server.cwd !== undefined) {
+      errors.push(`.mcp.json.mcpServers.${name}.cwd must be omitted for cross-version Codex compatibility`);
+    }
   }
 }
 

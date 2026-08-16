@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-08-17
+
+### Fixed
+
+- Removed the plugin-root `cwd` override that some Codex builds treated as a literal relative path,
+  preventing the MCP server from starting on Windows.
+- Packed-artifact smoke testing now launches the MCP server from outside the installed package so
+  working-directory regressions are caught before release.
+- Codex builds without the browser handoff host tool now receive the exact loopback URL for manual
+  opening instead of losing access to an otherwise healthy DSH runtime.
+
 ## [0.6.0] - 2026-08-17
 
 ### Added
