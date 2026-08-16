@@ -1,13 +1,25 @@
 {
   "name": "codex-deepseek-harness-bridge",
-  "version": "0.2.0",
-  "description": "A dependency-free MCP bridge from Codex to the DeepSeek Harness Web runtime.",
+  "version": "0.3.0",
+  "description": "A local-first MCP bridge that lets Codex operate visible DeepSeek Harness sessions.",
   "type": "module",
   "license": "MIT",
   "private": false,
+  "author": "DeepSeek Harness Bridge contributors",
+  "keywords": [
+    "codex",
+    "deepseek",
+    "deepseek-harness",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "agent-orchestration",
+    "local-first"
+  ],
   "engines": {
     "node": ">=22.19.0"
   },
+  "packageManager": "npm@10.9.8",
   "bin": {
     "codex-deepseek-harness-bridge": "scripts/server.mjs"
   },
@@ -18,11 +30,21 @@
     "src",
     "LICENSE",
     "README.md",
-    "README.zh-CN.md"
+    "README.zh-CN.md",
+    "CHANGELOG.md",
+    "CODE_OF_CONDUCT.md",
+    "SECURITY.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "check": "node --check scripts/server.mjs && node --check src/dsh-client.mjs",
+    "check": "node --check scripts/server.mjs && node --check scripts/live-probe.mjs && node --check scripts/mcp-live-probe.mjs && node --check src/dsh-client.mjs",
     "test": "node --test",
-    "test:live": "node scripts/live-probe.mjs"
+    "test:live": "node scripts/live-probe.mjs",
+    "test:mcp-live": "node scripts/mcp-live-probe.mjs",
+    "validate:plugin": "node .github/scripts/validate-plugin.mjs",
+    "verify": "npm run check && npm test && npm run validate:plugin",
+    "pack:dry-run": "npm pack --dry-run"
   }
 }

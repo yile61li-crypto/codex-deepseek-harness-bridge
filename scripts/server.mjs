@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 
 import { createInterface } from 'node:readline'
+import { isAbsolute, parse, resolve } from 'node:path'
 import { DshClient, DshRpcError, parsePermissionPreset } from '../src/dsh-client.mjs'
 
-const SERVER_INFO = { name: 'deepseek-harness-bridge', version: '0.2.0' }
+const SERVER_INFO = { name: 'deepseek-harness-bridge', version: '0.3.0' }
 const SUPPORTED_PROTOCOLS = new Set(['2024-11-05', '2025-03-26', '2025-06-18'])
+const PERMISSION_RANK = Object.freeze({ 'read-only': 0, 'workspace-write': 1, 'danger-full-access': 2 })
 const controllers = new Map()
 const client = new DshClient()
+const modelRequestTimes = []
+let activeWaits = 0
 
 function booleanEnv(name, fallback = false) {
   const value = process.env[name]
@@ -16,58 +20,160 @@ function booleanEnv(name, fallback = false) {
   throw new Error(`${name} must be true or false`)
 }
 
+function integerEnv(name, fallback, minimum, maximum) {
+  const value = process.env[name]
+  if (value === undefined || value === '') return fallback
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(`${name} must be an integer from ${minimum} to ${maximum}`)
+  }
+  return parsed
+}
+
+function optionalEnv(name) {
+  const value = process.env[name]
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined
+}
+
 const APPROVAL_RESPONSES_ENABLED = booleanEnv('DSH_ENABLE_APPROVAL_RESPONSES')
-const DANGER_FULL_ACCESS_ENABLED = booleanEnv('DSH_ALLOW_DANGER_FULL_ACCESS')
-const DEFAULT_PERMISSION = parsePermissionPreset(process.env.DSH_DEFAULT_PERMISSION ?? 'workspace-write')
-if (DEFAULT_PERMISSION === 'danger-full-access' && !DANGER_FULL_ACCESS_ENABLED) {
-  throw new Error('DSH_DEFAULT_PERMISSION=danger-full-access requires DSH_ALLOW_DANGER_FULL_ACCESS=true')
+const QUESTION_RESPONSES_ENABLED = booleanEnv('DSH_ENABLE_QUESTION_RESPONSES')
+const DEFAULT_PERMISSION = parsePermissionPreset(process.env.DSH_DEFAULT_PERMISSION ?? 'read-only')
+const MAX_PERMISSION = parsePermissionPreset(process.env.DSH_MAX_PERMISSION ?? 'workspace-write')
+const DEFAULT_CWD = optionalEnv('DSH_DEFAULT_CWD')
+const DEFAULT_WORKSPACE_ID = optionalEnv('DSH_DEFAULT_WORKSPACE_ID')
+const MAX_CONCURRENT_WAITS = integerEnv('DSH_MAX_CONCURRENT_WAITS', 4, 1, 32)
+const MODEL_REQUESTS_PER_MINUTE = integerEnv('DSH_MODEL_REQUESTS_PER_MINUTE', 12, 1, 120)
+if (PERMISSION_RANK[DEFAULT_PERMISSION] > PERMISSION_RANK[MAX_PERMISSION]) {
+  throw new Error('DSH_DEFAULT_PERMISSION must not exceed DSH_MAX_PERMISSION')
+}
+if (DEFAULT_CWD !== undefined && DEFAULT_WORKSPACE_ID !== undefined) {
+  throw new Error('DSH_DEFAULT_CWD and DSH_DEFAULT_WORKSPACE_ID are mutually exclusive')
 }
 
 function bridgePolicy() {
   return {
     defaultPermission: DEFAULT_PERMISSION,
-    dangerFullAccessEnabled: DANGER_FULL_ACCESS_ENABLED,
+    maxPermission: MAX_PERMISSION,
+    defaultTarget: DEFAULT_WORKSPACE_ID === undefined
+      ? DEFAULT_CWD === undefined ? null : { cwd: DEFAULT_CWD }
+      : { workspaceId: DEFAULT_WORKSPACE_ID },
     approvalResponsesEnabled: APPROVAL_RESPONSES_ENABLED,
+    questionResponsesEnabled: QUESTION_RESPONSES_ENABLED,
+    maxConcurrentWaits: MAX_CONCURRENT_WAITS,
+    modelRequestsPerMinute: MODEL_REQUESTS_PER_MINUTE,
   }
 }
 
 const tools = [
   {
     name: 'dsh_health',
-    description: 'Check whether the existing loopback DeepSeek Harness Web runtime is reachable.',
+    description: 'Check the loopback DSH runtime and report the bridge safety policy. host.version is only DSH\'s reported API placeholder, not a reliable product version.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'dsh_list_workspaces',
+    description: 'List DSH workspaces and their session ids so a new task can be placed deliberately instead of becoming ungrouped.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'dsh_list_agent_presets',
+    description: 'List the agent presets available in this DSH installation. A broken preset is reported but never selected automatically.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
     name: 'dsh_list_sessions',
-    description: 'List sessions visible in the existing DeepSeek Harness Web UI.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    description: 'List recent sessions visible in DSH Web, optionally filtered to one workspace or running sessions.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_id: { type: 'string', minLength: 1 },
+        running_only: { type: 'boolean', default: false },
+        limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'dsh_get_session',
+    description: 'Read one exact DSH session, its workspace grouping, and optionally a bounded recent message history.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', minLength: 1 },
+        include_history: { type: 'boolean', default: false },
+        max_messages: { type: 'integer', minimum: 1, maximum: 20, default: 8 },
+      },
+      required: ['session_id'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'dsh_search_sessions',
+    description: 'Search DSH session text to find the exact conversation to continue. Results are bounded by DSH.',
+    inputSchema: {
+      type: 'object', properties: { query: { type: 'string', minLength: 1, maxLength: 500 } },
+      required: ['query'], additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'dsh_get_models',
+    description: 'Read the advisory DSH model catalog for one session. routable=true is required before starting a model turn.',
+    inputSchema: {
+      type: 'object', properties: { session_id: { type: 'string', minLength: 1 } },
+      required: ['session_id'], additionalProperties: false,
+    },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
     name: 'dsh_start_task',
-    description: 'Create a visible DeepSeek Harness session and submit a task. This invokes the configured DeepSeek model and may incur usage.',
+    description: 'Always create a new visible DSH session and submit a model task. A workspace target is required; use dsh_send with the returned session_id for every follow-up.',
     inputSchema: {
       type: 'object',
       properties: {
         task: { type: 'string', minLength: 1, description: 'Task sent to DeepSeek Harness.' },
         cwd: { type: 'string', minLength: 1, description: 'Absolute workspace path used by DSH.' },
         workspace_id: { type: 'string', minLength: 1, description: 'Existing DSH workspace id; mutually exclusive with cwd.' },
-        agent_preset: { type: 'string', minLength: 1, default: 'standard' },
+        agent_preset: { type: 'string', minLength: 1, description: 'Optional explicit preset. Omit to use the DSH deployment default.' },
         session_id: { type: 'string', minLength: 1, description: 'Optional caller-supplied session id.' },
         permission: {
           type: 'string', enum: ['read-only', 'workspace-write', 'danger-full-access'],
-          description: 'Session permission set before the task is submitted. Defaults to DSH_DEFAULT_PERMISSION. danger-full-access also requires the operator opt-in environment flag.',
+          description: 'Session permission set before submission. It must not exceed DSH_MAX_PERMISSION; write modes require a registered workspace_id.',
         },
       },
       required: ['task'],
       additionalProperties: false,
     },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+  },
+  {
+    name: 'dsh_rename_session',
+    description: 'Rename one DSH session. This changes only session metadata, not its messages or files.',
+    inputSchema: {
+      type: 'object', properties: {
+        session_id: { type: 'string', minLength: 1 }, title: { type: 'string', minLength: 1, maxLength: 200 },
+      }, required: ['session_id', 'title'], additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+  },
+  {
+    name: 'dsh_fork_session',
+    description: 'Fork a DSH session at a completed turn boundary without invoking a model. Returns a new session_id.',
+    inputSchema: {
+      type: 'object', properties: {
+        session_id: { type: 'string', minLength: 1 }, at_seq: { type: 'integer', minimum: 0 },
+      }, required: ['session_id'], additionalProperties: false,
+    },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   },
   {
     name: 'dsh_set_permission',
-    description: 'Change one existing DSH session permission through the host /permission command. danger-full-access is rejected unless the operator enabled it in plugin configuration.',
+    description: 'Change one existing DSH session permission through the host /permission command, never above the operator-configured maximum.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -77,7 +183,7 @@ const tools = [
       required: ['session_id', 'permission'],
       additionalProperties: false,
     },
-    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
   },
   {
     name: 'dsh_send',
@@ -92,16 +198,17 @@ const tools = [
       required: ['session_id', 'message'],
       additionalProperties: false,
     },
-    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
   },
   {
     name: 'dsh_wait',
-    description: 'Wait for DSH progress or completion. Permission and question prompts are returned for the user to handle in the DSH Web UI; this tool never auto-approves them.',
+    description: 'Wait for DSH progress or completion. Exact approvals/questions are surfaced for explicit handling; this tool never responds automatically.',
     inputSchema: {
       type: 'object',
       properties: {
         session_id: { type: 'string', minLength: 1 },
         after_seq: { type: 'integer', minimum: -1, default: -1 },
+        prompt_rpc_id: { type: 'string', minLength: 1, description: 'promptRpcId returned by dsh_start_task/dsh_send; keeps queued follow-ups bound to the intended turn.' },
         timeout_ms: { type: 'integer', minimum: 100, maximum: 300000, default: 30000 },
       },
       required: ['session_id'],
@@ -123,17 +230,48 @@ const tools = [
       required: ['session_id', 'rpc_id', 'approval_id', 'decision'],
       additionalProperties: false,
     },
-    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+  },
+  {
+    name: 'dsh_answer_question',
+    description: 'Answer or cancel one exact pending DSH question batch. Disabled by default and never called without the user supplying the answers.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', minLength: 1 },
+        rpc_id: { type: 'string', minLength: 1 },
+        action: { type: 'string', enum: ['answer', 'cancel'], default: 'answer' },
+        answers: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', minLength: 1 },
+              selected: { type: 'array', items: { type: 'string' }, uniqueItems: true },
+              custom: { type: 'string', minLength: 1 },
+            },
+            required: ['id', 'selected'], additionalProperties: false,
+          },
+        },
+        cancel_message: { type: 'string', minLength: 1 },
+      },
+      required: ['session_id', 'rpc_id'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
   },
   {
     name: 'dsh_history',
-    description: 'Read a compact message-level summary of one DSH session without returning token-stream chunks.',
+    description: 'Read bounded message history with a correct backward cursor and optional truncated tool activity. Raw token chunks are never returned.',
     inputSchema: {
       type: 'object',
       properties: {
         session_id: { type: 'string', minLength: 1 },
         before_seq: { type: 'integer', minimum: 0 },
         max_messages: { type: 'integer', minimum: 1, maximum: 50, default: 8 },
+        max_chars: { type: 'integer', minimum: 1000, maximum: 100000, default: 30000 },
+        include_tools: { type: 'boolean', default: false },
+        max_tool_events: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
       },
       required: ['session_id'],
       additionalProperties: false,
@@ -149,7 +287,7 @@ const tools = [
       required: ['session_id'],
       additionalProperties: false,
     },
-    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
   },
 ]
 
@@ -174,50 +312,249 @@ function optionalInteger(args, key, fallback, minimum, maximum) {
   return value
 }
 
+function optionalBoolean(args, key, fallback = false) {
+  const value = args?.[key] ?? fallback
+  if (typeof value !== 'boolean') throw new DshRpcError(`${key} must be a boolean`, { code: 'invalid-argument' })
+  return value
+}
+
 function permissionFrom(args, key, fallback) {
   return parsePermissionPreset(args?.[key] ?? fallback)
 }
 
-function ensurePermissionEnabled(permission) {
-  if (permission === 'danger-full-access' && !DANGER_FULL_ACCESS_ENABLED) {
-    throw new DshRpcError('danger-full-access is disabled by the bridge operator', {
-      code: 'danger-full-access-disabled',
-      details: { requiredEnvironment: 'DSH_ALLOW_DANGER_FULL_ACCESS=true' },
+function ensurePermissionAllowed(permission) {
+  if (PERMISSION_RANK[permission] > PERMISSION_RANK[MAX_PERMISSION]) {
+    throw new DshRpcError(`${permission} exceeds the bridge operator's maximum permission`, {
+      code: 'permission-exceeds-maximum', details: { requested: permission, maximum: MAX_PERMISSION },
     })
   }
   return permission
 }
 
+function validateSchemaValue(value, schema, path) {
+  if (schema.enum !== undefined && !schema.enum.includes(value)) {
+    throw new DshRpcError(`${path} must be one of: ${schema.enum.join(', ')}`, { code: 'invalid-argument' })
+  }
+  if (schema.type === 'string') {
+    if (typeof value !== 'string') throw new DshRpcError(`${path} must be a string`, { code: 'invalid-argument' })
+    if (schema.minLength !== undefined && value.length < schema.minLength) throw new DshRpcError(`${path} is too short`, { code: 'invalid-argument' })
+    if (schema.maxLength !== undefined && value.length > schema.maxLength) throw new DshRpcError(`${path} is too long`, { code: 'invalid-argument' })
+  } else if (schema.type === 'integer') {
+    if (!Number.isInteger(value)) throw new DshRpcError(`${path} must be an integer`, { code: 'invalid-argument' })
+    if (schema.minimum !== undefined && value < schema.minimum) throw new DshRpcError(`${path} is below its minimum`, { code: 'invalid-argument' })
+    if (schema.maximum !== undefined && value > schema.maximum) throw new DshRpcError(`${path} exceeds its maximum`, { code: 'invalid-argument' })
+  } else if (schema.type === 'boolean') {
+    if (typeof value !== 'boolean') throw new DshRpcError(`${path} must be a boolean`, { code: 'invalid-argument' })
+  } else if (schema.type === 'array') {
+    if (!Array.isArray(value)) throw new DshRpcError(`${path} must be an array`, { code: 'invalid-argument' })
+    if (schema.uniqueItems === true && new Set(value.map(item => JSON.stringify(item))).size !== value.length) {
+      throw new DshRpcError(`${path} must not contain duplicates`, { code: 'invalid-argument' })
+    }
+    value.forEach((item, index) => validateSchemaValue(item, schema.items ?? {}, `${path}[${index}]`))
+  } else if (schema.type === 'object') {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      throw new DshRpcError(`${path} must be an object`, { code: 'invalid-argument' })
+    }
+    for (const key of schema.required ?? []) {
+      if (value[key] === undefined) throw new DshRpcError(`${path}.${key} is required`, { code: 'invalid-argument' })
+    }
+    if (schema.additionalProperties === false) {
+      for (const key of Object.keys(value)) {
+        if (schema.properties?.[key] === undefined) throw new DshRpcError(`Unknown argument: ${path}.${key}`, { code: 'invalid-argument' })
+      }
+    }
+    for (const [key, propertySchema] of Object.entries(schema.properties ?? {})) {
+      if (value[key] !== undefined) validateSchemaValue(value[key], propertySchema, `${path}.${key}`)
+    }
+  }
+}
+
+function validateToolArguments(name, args) {
+  const definition = tools.find(tool => tool.name === name)
+  if (definition === undefined) throw new DshRpcError(`Unknown tool: ${String(name)}`, { code: 'unknown-tool' })
+  validateSchemaValue(args, definition.inputSchema, 'arguments')
+}
+
+function validatedCwd(value) {
+  if (!isAbsolute(value)) throw new DshRpcError('cwd must be an absolute path', { code: 'invalid-workspace-target' })
+  const normalized = resolve(value)
+  if (normalized === parse(normalized).root) {
+    throw new DshRpcError('cwd must not be a filesystem root', { code: 'invalid-workspace-target' })
+  }
+  return normalized
+}
+
+function resolveTaskTarget(args, permission) {
+  const explicitCwd = optionalString(args, 'cwd')
+  const explicitWorkspaceId = optionalString(args, 'workspace_id')
+  if (explicitCwd !== undefined && explicitWorkspaceId !== undefined) {
+    throw new DshRpcError('cwd and workspace_id are mutually exclusive', { code: 'invalid-argument' })
+  }
+  const cwd = explicitCwd ?? (explicitWorkspaceId === undefined ? DEFAULT_CWD : undefined)
+  const workspaceId = explicitWorkspaceId ?? (explicitCwd === undefined ? DEFAULT_WORKSPACE_ID : undefined)
+  if (cwd === undefined && workspaceId === undefined) {
+    throw new DshRpcError('Choose an existing session to continue, or specify workspace_id/cwd for a new session', {
+      code: 'task-target-required', details: { nextTools: ['dsh_list_workspaces', 'dsh_list_sessions'] },
+    })
+  }
+  if (permission !== 'read-only' && workspaceId === undefined) {
+    throw new DshRpcError('Writable permissions require an operator-registered DSH workspace_id', {
+      code: 'registered-workspace-required', details: { permission },
+    })
+  }
+  return workspaceId === undefined ? { cwd: validatedCwd(cwd) } : { workspaceId }
+}
+
+function consumeModelRequestQuota() {
+  const cutoff = Date.now() - 60_000
+  while (modelRequestTimes[0] !== undefined && modelRequestTimes[0] <= cutoff) modelRequestTimes.shift()
+  if (modelRequestTimes.length >= MODEL_REQUESTS_PER_MINUTE) {
+    throw new DshRpcError('Model request rate limit reached; retry after the one-minute window', {
+      code: 'model-rate-limited', details: { limit: MODEL_REQUESTS_PER_MINUTE, windowSeconds: 60 },
+    })
+  }
+  modelRequestTimes.push(Date.now())
+}
+
+function workspaceMap(workspaceResult) {
+  const map = new Map()
+  for (const workspace of workspaceResult.workspaces) {
+    for (const sessionId of workspace.sessionIds) {
+      map.set(sessionId, { workspaceId: workspace.workspaceId, workspaceTitle: workspace.title, workspacePath: workspace.path })
+    }
+  }
+  return map
+}
+
+function ensureSessionWithinPolicy(session, workspaces) {
+  const permission = session.permissions
+  if (PERMISSION_RANK[permission] === undefined) {
+    throw new DshRpcError('The session permission is unknown; set an explicit permitted value before continuing', {
+      code: 'session-permission-unknown', details: { sessionId: session.sessionId, permission },
+    })
+  }
+  if (PERMISSION_RANK[permission] > PERMISSION_RANK[MAX_PERMISSION]) {
+    throw new DshRpcError('The existing session exceeds this bridge instance\'s permission ceiling; downgrade it before continuing', {
+      code: 'session-permission-exceeds-maximum',
+      details: { sessionId: session.sessionId, current: permission, maximum: MAX_PERMISSION },
+    })
+  }
+  if (permission !== 'read-only' && !workspaceMap(workspaces).has(session.sessionId)) {
+    throw new DshRpcError('Writable sessions must belong to an operator-registered DSH workspace before continuing', {
+      code: 'registered-workspace-required', details: { sessionId: session.sessionId, permission },
+    })
+  }
+}
+
+function requestKey(id) {
+  return `${typeof id}:${String(id)}`
+}
+
 async function callTool(name, args, signal) {
+  validateToolArguments(name, args)
   switch (name) {
-    case 'dsh_health':
-      return { ...(await client.health({ signal })), bridgePolicy: bridgePolicy() }
-    case 'dsh_list_sessions':
-      return { sessions: await client.listSessions({ signal }) }
+    case 'dsh_health': {
+      const health = await client.health({ signal })
+      const optional = await Promise.allSettled([client.listWorkspaces({ signal }), client.listAgentPresets({ signal })])
+      return {
+        ...health,
+        reportedHostApiVersion: health.host?.version ?? null,
+        testedDshVersions: ['0.1.0-rc.5'],
+        optionalCapabilities: {
+          workspaces: optional[0].status === 'fulfilled', agentPresets: optional[1].status === 'fulfilled',
+        },
+        bridgePolicy: bridgePolicy(),
+      }
+    }
+    case 'dsh_list_workspaces':
+      return client.listWorkspaces({ signal })
+    case 'dsh_list_agent_presets':
+      return client.listAgentPresets({ signal })
+    case 'dsh_list_sessions': {
+      const [sessions, workspaces] = await Promise.all([client.listSessions({ signal }), client.listWorkspaces({ signal })])
+      const groups = workspaceMap(workspaces)
+      const workspaceId = optionalString(args, 'workspace_id')
+      const runningOnly = optionalBoolean(args, 'running_only')
+      const limit = optionalInteger(args, 'limit', 20, 1, 100)
+      const visible = sessions
+        .map(session => ({
+          ...session, archived: false,
+          ...(groups.get(session.sessionId) ?? { workspaceId: null, workspaceTitle: null, workspacePath: null }),
+        }))
+        .filter(session => workspaceId === undefined || session.workspaceId === workspaceId)
+        .filter(session => !runningOnly || session.running)
+        .slice(0, limit)
+      return {
+        sessions: visible, returned: visible.length, totalVisible: sessions.length,
+        archivedSessionIds: workspaces.archivedSessionIds,
+      }
+    }
+    case 'dsh_get_session': {
+      const sessionId = requireString(args, 'session_id')
+      const [session, workspaces] = await Promise.all([client.getSession(sessionId, { signal }), client.listWorkspaces({ signal })])
+      const grouped = {
+        ...session, archived: false,
+        ...(workspaceMap(workspaces).get(sessionId) ?? { workspaceId: null, workspaceTitle: null, workspacePath: null }),
+      }
+      if (!optionalBoolean(args, 'include_history')) return { session: grouped }
+      return {
+        session: grouped,
+        history: await client.history(sessionId, {
+          maxMessages: optionalInteger(args, 'max_messages', 8, 1, 20), signal,
+        }),
+      }
+    }
+    case 'dsh_search_sessions':
+      return client.searchSessions(requireString(args, 'query'), { signal })
+    case 'dsh_get_models':
+      return client.getModels(requireString(args, 'session_id'), { signal })
     case 'dsh_start_task': {
       const task = requireString(args, 'task')
-      const cwd = optionalString(args, 'cwd')
-      const workspaceId = optionalString(args, 'workspace_id')
-      const permission = ensurePermissionEnabled(permissionFrom(args, 'permission', DEFAULT_PERMISSION))
-      if (cwd !== undefined && workspaceId !== undefined) throw new DshRpcError('cwd and workspace_id are mutually exclusive', { code: 'invalid-argument' })
+      const permission = ensurePermissionAllowed(permissionFrom(args, 'permission', DEFAULT_PERMISSION))
+      const target = resolveTaskTarget(args, permission)
+      consumeModelRequestQuota()
       const created = await client.createSession({
-        cwd,
-        workspaceId,
+        ...target,
         sessionId: optionalString(args, 'session_id'),
-        agentPreset: optionalString(args, 'agent_preset') ?? 'standard',
+        agentPreset: optionalString(args, 'agent_preset'),
       }, { signal })
       try {
         await client.setPermission(created.sessionId, permission, { signal })
+        const baseline = await client.getSession(created.sessionId, { signal })
         const accepted = await client.prompt(created.sessionId, task, { mode: 'queue', signal })
-        return { ...created, permission, accepted: accepted.accepted === true, visibleInWebUi: true }
+        return {
+          ...created, ...target, permission, accepted: accepted.accepted === true,
+          promptRpcId: accepted.promptRpcId, visibleInWebUi: true,
+          waitAfterSeq: baseline.lastSeq ?? -1,
+          continueWith: { tool: 'dsh_send', sessionId: created.sessionId },
+        }
       } catch (error) {
         if (error instanceof DshRpcError) error.details = { ...error.details, createdSessionId: created.sessionId }
         throw error
       }
     }
+    case 'dsh_rename_session': {
+      const sessionId = requireString(args, 'session_id')
+      return { sessionId, ...(await client.renameSession(sessionId, requireString(args, 'title'), { signal })) }
+    }
+    case 'dsh_fork_session': {
+      const sourceSessionId = requireString(args, 'session_id')
+      const result = await client.forkSession(sourceSessionId, {
+        atSeq: args?.at_seq === undefined ? undefined : optionalInteger(args, 'at_seq', 0, 0, Number.MAX_SAFE_INTEGER), signal,
+      })
+      return { sourceSessionId, sessionId: result.sessionId, continueWith: { tool: 'dsh_send', sessionId: result.sessionId } }
+    }
     case 'dsh_set_permission': {
       const sessionId = requireString(args, 'session_id')
-      const permission = ensurePermissionEnabled(permissionFrom(args, 'permission'))
+      const permission = ensurePermissionAllowed(permissionFrom(args, 'permission'))
+      if (permission !== 'read-only') {
+        const workspaces = await client.listWorkspaces({ signal })
+        if (!workspaceMap(workspaces).has(sessionId)) {
+          throw new DshRpcError('Writable permissions require a session in an operator-registered DSH workspace', {
+            code: 'registered-workspace-required', details: { sessionId, permission },
+          })
+        }
+      }
       return client.setPermission(sessionId, permission, { signal })
     }
     case 'dsh_send': {
@@ -225,17 +562,41 @@ async function callTool(name, args, signal) {
       const message = requireString(args, 'message')
       const mode = args?.mode ?? 'queue'
       if (mode !== 'queue' && mode !== 'steer') throw new DshRpcError('mode must be queue or steer', { code: 'invalid-argument' })
-      return { sessionId, ...(await client.prompt(sessionId, message, { mode, signal })) }
+      const [baseline, workspaces] = await Promise.all([
+        client.getSession(sessionId, { signal }), client.listWorkspaces({ signal }),
+      ])
+      ensureSessionWithinPolicy(baseline, workspaces)
+      consumeModelRequestQuota()
+      return {
+        sessionId, ...(await client.prompt(sessionId, message, { mode, signal })),
+        waitAfterSeq: baseline.lastSeq ?? -1, continueWith: { tool: 'dsh_send', sessionId },
+      }
     }
     case 'dsh_wait': {
-      const result = await client.wait(requireString(args, 'session_id'), {
-        afterSeq: optionalInteger(args, 'after_seq', -1, -1, Number.MAX_SAFE_INTEGER),
-        timeoutMs: optionalInteger(args, 'timeout_ms', 30_000, 100, 300_000),
-        signal,
-      })
+      if (activeWaits >= MAX_CONCURRENT_WAITS) {
+        throw new DshRpcError('Too many concurrent dsh_wait calls', {
+          code: 'wait-concurrency-limit', details: { maximum: MAX_CONCURRENT_WAITS },
+        })
+      }
+      activeWaits += 1
+      let result
+      try {
+        result = await client.wait(requireString(args, 'session_id'), {
+          afterSeq: optionalInteger(args, 'after_seq', -1, -1, Number.MAX_SAFE_INTEGER),
+          promptRpcId: optionalString(args, 'prompt_rpc_id'),
+          timeoutMs: optionalInteger(args, 'timeout_ms', 30_000, 100, 300_000),
+          signal,
+        })
+      } finally {
+        activeWaits -= 1
+      }
       if (result.kind === 'approval' && result.approval !== undefined) {
         result.approval.responseEnabled = APPROVAL_RESPONSES_ENABLED
         result.approval.responseMode = APPROVAL_RESPONSES_ENABLED ? 'mcp-or-web-ui' : 'web-ui-only'
+      }
+      if (result.kind === 'question' && result.question !== undefined) {
+        result.question.responseEnabled = QUESTION_RESPONSES_ENABLED
+        result.question.responseMode = QUESTION_RESPONSES_ENABLED ? 'mcp-or-web-ui' : 'web-ui-only'
       }
       return result
     }
@@ -257,10 +618,31 @@ async function callTool(name, args, signal) {
         outcome: decision === 'allow_once' ? 'allowed-once' : 'rejected',
       }, { signal })
     }
+    case 'dsh_answer_question': {
+      if (!QUESTION_RESPONSES_ENABLED) {
+        throw new DshRpcError('MCP question responses are disabled; answer in DSH Web instead', {
+          code: 'question-responses-disabled',
+          details: { requiredEnvironment: 'DSH_ENABLE_QUESTION_RESPONSES=true' },
+        })
+      }
+      const action = args?.action ?? 'answer'
+      const rpcId = requireString(args, 'rpc_id')
+      if (action === 'cancel') {
+        if (args?.answers !== undefined) throw new DshRpcError('answers must be omitted when cancelling', { code: 'invalid-argument' })
+        return client.cancelQuestion({ rpcId, message: optionalString(args, 'cancel_message') ?? 'Cancelled by user' }, { signal })
+      }
+      if (args?.cancel_message !== undefined) throw new DshRpcError('cancel_message is only valid for action=cancel', { code: 'invalid-argument' })
+      return client.respondQuestion({
+        sessionId: requireString(args, 'session_id'), rpcId, answers: args?.answers,
+      }, { signal })
+    }
     case 'dsh_history':
       return client.history(requireString(args, 'session_id'), {
         beforeSeq: args?.before_seq === undefined ? undefined : optionalInteger(args, 'before_seq', 0, 0, Number.MAX_SAFE_INTEGER),
         maxMessages: optionalInteger(args, 'max_messages', 8, 1, 50),
+        maxChars: optionalInteger(args, 'max_chars', 30_000, 1_000, 100_000),
+        includeTools: optionalBoolean(args, 'include_tools'),
+        maxToolEvents: optionalInteger(args, 'max_tool_events', 20, 1, 100),
         signal,
       })
     case 'dsh_cancel': {
@@ -304,13 +686,14 @@ async function handleRequest(message) {
   if (method === 'tools/list') return { tools }
   if (method === 'tools/call') {
     const controller = new AbortController()
-    controllers.set(String(id), controller)
+    const key = requestKey(id)
+    controllers.set(key, controller)
     try {
       return toolResult(await callTool(params?.name, params?.arguments ?? {}, controller.signal))
     } catch (error) {
       return toolError(error)
     } finally {
-      controllers.delete(String(id))
+      controllers.delete(key)
     }
   }
   const error = new Error(`Method not found: ${String(method)}`)
@@ -324,7 +707,7 @@ async function handleMessage(message) {
     return
   }
   if (message.method === 'notifications/cancelled') {
-    controllers.get(String(message.params?.requestId))?.abort(new Error(message.params?.reason ?? 'cancelled'))
+    controllers.get(requestKey(message.params?.requestId))?.abort(new Error(message.params?.reason ?? 'cancelled'))
     return
   }
   if (message.id === undefined) return

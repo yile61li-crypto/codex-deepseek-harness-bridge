@@ -9,9 +9,14 @@
       "cwd": "${PLUGIN_ROOT}",
       "env": {
         "DSH_WEB_URL": "http://127.0.0.1:3080",
-        "DSH_DEFAULT_PERMISSION": "workspace-write",
-        "DSH_ALLOW_DANGER_FULL_ACCESS": "false",
-        "DSH_ENABLE_APPROVAL_RESPONSES": "false"
+        "DSH_DEFAULT_PERMISSION": "read-only",
+        "DSH_MAX_PERMISSION": "workspace-write",
+        "DSH_DEFAULT_CWD": "",
+        "DSH_DEFAULT_WORKSPACE_ID": "",
+        "DSH_ENABLE_APPROVAL_RESPONSES": "false",
+        "DSH_ENABLE_QUESTION_RESPONSES": "false",
+        "DSH_MAX_CONCURRENT_WAITS": "4",
+        "DSH_MODEL_REQUESTS_PER_MINUTE": "12"
       }
     }
   }

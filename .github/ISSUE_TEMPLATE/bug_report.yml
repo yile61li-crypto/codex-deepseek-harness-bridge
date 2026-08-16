@@ -1,0 +1,85 @@
+name: Bug report
+description: Report a reproducible problem in the bridge.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve the project. Remove secrets, prompts, and private paths from logs before submitting.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest sequence that consistently reproduces the problem.
+      placeholder: |
+        1. Start DeepSeek Harness Web with ...
+        2. Configure the bridge with ...
+        3. Call ...
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: input
+    id: bridge-version
+    attributes:
+      label: Bridge version
+      placeholder: 0.3.0
+    validations:
+      required: true
+
+  - type: input
+    id: dsh-version
+    attributes:
+      label: DeepSeek Harness version
+      placeholder: 0.1.0-rc.5
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, Node.js version, Codex version, and install method.
+      placeholder: Windows 11; Node.js 22.19.0; Codex ...; local marketplace
+    validations:
+      required: true
+
+  - type: dropdown
+    id: permission
+    attributes:
+      label: DSH permission preset
+      options:
+        - read-only
+        - workspace-write
+        - danger-full-access
+        - Not applicable
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs or MCP response
+      description: Paste only the relevant output after removing credentials and private data.
+      render: text
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission checks
+      options:
+        - label: I searched existing issues for this problem.
+          required: true
+        - label: I reproduced this with the latest released bridge version.
+          required: true
+        - label: This report does not disclose a security vulnerability or secret.
+          required: true
